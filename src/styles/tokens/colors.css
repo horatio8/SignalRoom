@@ -1,0 +1,136 @@
+/* ============================================================
+   Signal Room — color tokens
+   LIGHT ("desk") is the DEFAULT theme — the primary interface.
+   Dark ("ops") is a toggle, scoped under [data-theme="dark"].
+   RULES:
+   - Sentiment colors (--pos/--neg/--warn) carry meaning. Never decorative.
+   - Opponent data is ALWAYS --chart-them (neutral gray). Never red.
+   - --accent is the single interactive color and "us" in charts.
+     It is the white-label override point.
+   - Heat ramp (--heat-0..5) is for INTENSITY ONLY (volume, velocity,
+     recency) — never for sentiment, never decorative. Hot = look here.
+   ============================================================ */
+
+:root {
+  /* ---- semantic surfaces (light) ---- */
+  --surface-app: #F4F5F8;
+  --surface-panel: #FFFFFF;
+  --surface-raised: #EFF1F6;
+  --surface-overlay: #FFFFFF;
+  --surface-sunken: #E9EBF2;
+
+  /* ---- borders ---- */
+  --border-subtle: #E5E8F0;
+  --border-default: #D5DAE6;
+  --border-strong: #B9C1D2;
+
+  /* ---- text ---- */
+  --text-primary: #151923;
+  --text-secondary: #58627A;
+  --text-tertiary: #8A93A8;
+  --text-inverse: #FFFFFF;
+  --text-on-accent: #FFFFFF;
+
+  /* ---- accent (interactive, "us"; white-label override point) ---- */
+  --accent: #3D5FE0;
+  --accent-hover: #2E4FCC;
+  --accent-active: #2542B3;
+  --accent-subtle: rgba(61, 95, 224, 0.09);
+  --accent-border: rgba(61, 95, 224, 0.35);
+  --accent-text: #3D5FE0;
+
+  /* ---- sentiment (meaning-bearing; never decorative) ---- */
+  --pos: #1E9E56;
+  --pos-subtle: rgba(30, 158, 86, 0.10);
+  --pos-text: #187F45;
+  --neg: #D8403A;
+  --neg-subtle: rgba(216, 64, 58, 0.09);
+  --neg-text: #C0332E;
+  --warn: #B07C1E;
+  --warn-subtle: rgba(176, 124, 30, 0.11);
+  --warn-text: #93670F;
+
+  /* ---- severity (info | watch | urgent — fixed 3-level language) ---- */
+  --sev-info: #6C7690;
+  --sev-info-subtle: rgba(108, 118, 144, 0.10);
+  --sev-watch: var(--warn);
+  --sev-watch-subtle: var(--warn-subtle);
+  --sev-urgent: var(--neg);
+  --sev-urgent-subtle: var(--neg-subtle);
+
+  /* ---- heat ramp: intensity only (volume, velocity, recency) ----
+     0 = cold/quiet … 5 = on fire / look here NOW.
+     Text on heat-0..2: --text-primary; on heat-3..5: #FFFFFF. */
+  --heat-0: #EEF1F6;
+  --heat-1: #FFEFD1;
+  --heat-2: #FFD695;
+  --heat-3: #FC9E4F;
+  --heat-4: #F26430;
+  --heat-5: #D81E05;
+
+  /* ---- charts ---- */
+  --chart-us: var(--accent);
+  --chart-them: #98A1B8;              /* opponent: neutral gray, never red */
+  --chart-grid: #E8EAF1;
+  --chart-media: #3D5FE0;
+  --chart-social: #12939F;
+
+  /* ---- misc ---- */
+  --focus-ring: var(--accent);
+  --scrim: rgba(21, 25, 35, 0.40);
+}
+
+/* ============================================================
+   Dark theme — "ops mode" toggle
+   ============================================================ */
+[data-theme="dark"] {
+  --surface-app: #0D1017;
+  --surface-panel: #12161F;
+  --surface-raised: #181D29;
+  --surface-overlay: #1F2534;
+  --surface-sunken: #080A10;
+
+  --border-subtle: #1D2330;
+  --border-default: #29303F;
+  --border-strong: #3B4457;
+
+  --text-primary: #E9EDF5;
+  --text-secondary: #9AA3B7;
+  --text-tertiary: #656F85;
+  --text-inverse: #0D1017;
+
+  --accent: #5B7CFA;
+  --accent-hover: #7590FF;
+  --accent-active: #4A67E0;
+  --accent-subtle: rgba(91, 124, 250, 0.13);
+  --accent-border: rgba(91, 124, 250, 0.40);
+  --accent-text: #8CA3FF;
+
+  --pos: #3EC272;
+  --pos-subtle: rgba(62, 194, 114, 0.13);
+  --pos-text: #5BD489;
+  --neg: #F0564F;
+  --neg-subtle: rgba(240, 86, 79, 0.13);
+  --neg-text: #FF7A73;
+  --warn: #D9A13F;
+  --warn-subtle: rgba(217, 161, 63, 0.14);
+  --warn-text: #E8B65C;
+
+  --sev-info: #8B96AD;
+  --sev-info-subtle: rgba(139, 150, 173, 0.13);
+
+  --heat-0: #161B27;
+  --heat-1: #3B2E15;
+  --heat-2: #6E4E1B;
+  --heat-3: #A85E22;
+  --heat-4: #D95B26;
+  --heat-5: #F0421F;
+
+  --chart-them: #6B7590;
+  --chart-grid: #1C2230;
+  --chart-media: #8CA3FF;
+  --chart-social: #46B8C8;
+
+  --scrim: rgba(4, 6, 10, 0.62);
+  --shadow-card-light: none;   /* dark: depth from borders + surface steps only */
+}

@@ -1,0 +1,46 @@
+/* ============================================================
+   Signal Room — typography tokens
+   Three voices:
+   1. Archivo         — UI chrome + display (wide-stretch for display)
+   2. IBM Plex Mono   — ALL data: numbers, deltas, timestamps,
+                        keyword terms, ids, counts. If it's a value,
+                        it's mono.
+   3. Source Serif 4  — briefing prose ONLY (the analyst's voice).
+   ============================================================ */
+
+:root {
+  --font-ui: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-display: 'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace;
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+
+  /* display uses the wide cut of Archivo */
+  --display-stretch: 112%;
+  --display-tracking: -0.02em;
+
+  /* ---- size scale (dense operational product; base UI = 13px) ---- */
+  --text-2xs: 10.5px;   /* micro labels, axis ticks */
+  --text-xs: 11.5px;    /* meta rows, timestamps, chips */
+  --text-sm: 13px;      /* default UI text */
+  --text-md: 14px;      /* emphasized body, briefing prose base */
+  --text-lg: 16px;      /* card titles, section heads */
+  --text-xl: 20px;      /* page titles */
+  --text-2xl: 26px;     /* KPI values */
+  --text-3xl: 34px;     /* hero numbers */
+  --text-display: 44px; /* marketing / empty states */
+
+  /* ---- weights ---- */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---- line heights ---- */
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-prose: 1.65;   /* serif briefing prose */
+
+  /* ---- label style (overline) ---- */
+  --label-tracking: 0.08em;   /* uppercase micro-labels */
+}

@@ -1,0 +1,14 @@
+/* Signal Room — minimal base */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: var(--accent-subtle); }

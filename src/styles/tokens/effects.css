@@ -1,0 +1,25 @@
+/* ============================================================
+   Signal Room — radii, borders, shadows, motion
+   Depth on dark comes from borders + surface steps, not shadows.
+   Shadows are reserved for true overlays (dialog, popover, toast).
+   ============================================================ */
+
+:root {
+  --radius-sm: 6px;      /* chips, badges, small controls */
+  --radius-md: 10px;     /* inputs, buttons, rows */
+  --radius-lg: 14px;     /* cards, panels, dialogs */
+  --radius-full: 999px;  /* pills, dots */
+
+  --shadow-overlay: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-card-light: 0 1px 2px rgba(21, 25, 35, 0.06), 0 4px 16px rgba(21, 25, 35, 0.05);
+  /* on dark, cards carry no shadow — overridden to none in colors.css dark scope */
+
+  /* focus: 2px ring offset from the surface */
+  --ring: 0 0 0 2px var(--surface-app), 0 0 0 4px var(--focus-ring);
+
+  /* motion: quick and matter-of-fact; no bounces */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+}

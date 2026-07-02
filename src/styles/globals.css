@@ -1,0 +1,34 @@
+/* Signal Room — global entry.
+   Tokens are imported verbatim from the design handoff (single source of truth).
+   Fonts are self-hosted via next/font (see src/app/layout.tsx), replacing the
+   handoff's Google Fonts CDN import — the swap the handoff prescribes for production. */
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/effects.css";
+@import "./tokens/base.css";
+
+/* Map the three type voices onto the next/font self-hosted families. */
+:root {
+  --font-ui: var(--font-archivo), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-display: var(--font-archivo), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-plex-mono), 'SF Mono', Menlo, Consolas, monospace;
+  --font-serif: var(--font-source-serif), Georgia, 'Times New Roman', serif;
+}
+
+html, body {
+  height: 100%;
+}
+
+button, input, select, textarea {
+  font-family: var(--font-ui);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+*:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
