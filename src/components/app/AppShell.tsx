@@ -1,0 +1,408 @@
+"use client";
+
+/**
+ * App chrome: 52px top bar + 216px sidebar + scrolling content column
+ * (max 1320px). Faithful port of the prototype shell, with navigation moved
+ * to Next.js routes (spec §8: /[campaign]/overview … /admin, /onboarding).
+ */
+
+import React, { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useApp, campaignResetPatch, type CampaignId, type Role } from "@/lib/state";
+import { dataFor, CAMPAIGNS } from "@/lib/data";
+import { displayType } from "@/lib/ui";
+
+/** Screens a client_viewer may see (role gating per handoff §App shell). */
+const CLIENT_ALLOWED = ["overview", "narrative", "feed", "stories", "briefings"];
+
+interface NavItem {
+  id: string;
+  label: string;
+  badge?: string | null;
+  roles?: Role[];
+}
+
+export function screenHref(campaign: CampaignId, screen: string): string {
+  if (screen === "admin") return "/admin";
+  if (screen === "onboarding") return "/onboarding";
+  if (screen === "login") return "/login";
+  return `/${campaign}/${screen}`;
+}
+
+export function AppShell({
+  screen,
+  campaign,
+  children,
+}: {
+  screen: string;
+  campaign: CampaignId;
+  children: React.ReactNode;
+}) {
+  const { state, set } = useApp();
+  const router = useRouter();
+  const { role, dark } = state;
+  const D = dataFor(campaign);
+  const canManage = role !== "client";
+  const isClient = role === "client";
+
+  // Keep "current campaign" in state for the campaign-less routes (/admin, /onboarding).
+  useEffect(() => {
+    if (state.campaign !== campaign) set({ campaign });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign]);
+
+  // Role gating on direct navigation: clients bounce off gated screens.
+  useEffect(() => {
+    if (role === "client" && !CLIENT_ALLOWED.includes(screen)) {
+      router.replace(screenHref(campaign, "overview"));
+    }
+  }, [role, screen, campaign, router]);
+
+  const go = (id: string) => router.push(screenHref(campaign, id));
+
+  const allNav: NavItem[] = [
+    { id: "overview", label: "Overview" },
+    { id: "narrative", label: "Narrative" },
+    { id: "feed", label: "Feed" },
+    { id: "stories", label: "Stories" },
+    { id: "briefings", label: "Briefings" },
+    { id: "alerts", label: "Alerts", badge: D.alertBadge, roles: ["owner", "operator"] },
+    { id: "respond", label: "Respond", badge: D.respondBadge, roles: ["owner", "operator"] },
+    { id: "reach", label: "Reach", roles: ["owner", "operator"] },
+    { id: "settings", label: "Settings", roles: ["owner", "operator"] },
+    { id: "templates", label: "Templates", roles: ["owner", "operator"] },
+    { id: "admin", label: "Admin", roles: ["owner"] },
+  ];
+  const nav = allNav.filter((n) => !n.roles || n.roles.includes(role));
+
+  const setRole = (r: Role) => {
+    set({ role: r });
+    if (r === "client" && !CLIENT_ALLOWED.includes(screen)) {
+      router.push(screenHref(campaign, "overview"));
+    }
+  };
+
+  const setCampaign = (c: CampaignId) => {
+    set({ campaign: c, ...campaignResetPatch });
+    if (screen !== "admin" && screen !== "onboarding") {
+      router.push(screenHref(c, screen));
+    }
+  };
+
+  const roleLabel = role === "client" ? "Client viewer" : role[0].toUpperCase() + role.slice(1);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        background: "var(--surface-app)",
+        fontFamily: "var(--font-ui)",
+        fontSize: 13,
+        color: "var(--text-primary)",
+      }}
+    >
+      {/* ============ TOP BAR ============ */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+          height: 52,
+          padding: "0 16px",
+          background: "var(--surface-panel)",
+          borderBottom: "1px solid var(--border-subtle)",
+          flex: "none",
+        }}
+      >
+        <div style={{ ...displayType, fontWeight: 700, fontSize: 15, whiteSpace: "nowrap" }}>
+          Signal<span style={{ color: "var(--text-secondary)", fontWeight: 500 }}> Room</span>
+        </div>
+        <div style={{ width: 1, height: 20, background: "var(--border-default)" }} />
+        <select
+          value={campaign}
+          onChange={(e) => setCampaign(e.target.value as CampaignId)}
+          style={{
+            height: 30,
+            padding: "0 28px 0 10px",
+            borderRadius: 8,
+            background: "var(--surface-raised)",
+            border: "1px solid var(--border-default)",
+            fontFamily: "var(--font-ui)",
+            fontSize: 12.5,
+            color: "var(--text-primary)",
+            cursor: "pointer",
+            outline: "none",
+            appearance: "auto",
+          }}
+        >
+          {CAMPAIGNS.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: "var(--text-tertiary)",
+          }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--pos)" }} />
+          ingest live · 42/hr
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+          <div
+            style={{
+              display: "flex",
+              background: "var(--surface-raised)",
+              border: "1px solid var(--border-default)",
+              borderRadius: 8,
+              padding: 2,
+              gap: 2,
+            }}
+          >
+            {(["owner", "operator", "client"] as Role[]).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRole(r)}
+                style={{
+                  height: 24,
+                  padding: "0 10px",
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-ui)",
+                  fontSize: 11.5,
+                  fontWeight: role === r ? 600 : 500,
+                  background: role === r ? "var(--surface-panel)" : "transparent",
+                  color: role === r ? "var(--text-primary)" : "var(--text-tertiary)",
+                }}
+              >
+                {r === "client" ? "Client" : r[0].toUpperCase() + r.slice(1)}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => set((s) => ({ dark: !s.dark }))}
+            title="Toggle dark ops mode"
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 8,
+              border: "1px solid var(--border-default)",
+              background: "var(--surface-raised)",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              fontSize: 13,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            ◐
+          </button>
+          <div
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: "50%",
+              background: "var(--accent-subtle)",
+              border: "1px solid var(--accent-border)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10.5,
+              fontWeight: 600,
+              color: "var(--accent-text)",
+            }}
+          >
+            TK
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* ============ SIDEBAR ============ */}
+        <div
+          style={{
+            width: 216,
+            flex: "none",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            padding: "12px 8px",
+            background: "var(--surface-panel)",
+            borderRight: "1px solid var(--border-subtle)",
+          }}
+        >
+          {nav.map((item) => {
+            const active = item.id === screen;
+            return (
+              <button
+                key={item.id}
+                onClick={() => go(item.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  height: 34,
+                  padding: "0 12px",
+                  borderRadius: 8,
+                  border: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontFamily: "var(--font-ui)",
+                  fontSize: 13,
+                  fontWeight: active ? 600 : 500,
+                  background: active ? "var(--accent-subtle)" : "transparent",
+                  color: active ? "var(--accent-text)" : "var(--text-secondary)",
+                }}
+              >
+                <span style={{ flex: 1 }}>{item.label}</span>
+                {item.badge && (
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      padding: "1px 7px",
+                      borderRadius: 999,
+                      background: "var(--neg-subtle)",
+                      color: "var(--neg-text)",
+                    }}
+                  >
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          <div style={{ flex: 1 }} />
+          {canManage && (
+            <button
+              onClick={() => go("onboarding")}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                height: 34,
+                borderRadius: 8,
+                border: "1px dashed var(--border-strong)",
+                background: "transparent",
+                cursor: "pointer",
+                fontFamily: "var(--font-ui)",
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: "var(--text-secondary)",
+              }}
+            >
+              + New campaign
+            </button>
+          )}
+          <button
+            onClick={() => {
+              set({ loginState: "idle" });
+              router.push("/login");
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              height: 38,
+              padding: "0 12px",
+              marginTop: 4,
+              borderRadius: 8,
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              textAlign: "left",
+              fontFamily: "var(--font-ui)",
+            }}
+          >
+            <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>Tom Keller</span>
+              <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{roleLabel} · sign out</span>
+            </span>
+          </button>
+        </div>
+
+        {/* ============ CONTENT ============ */}
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+          <div
+            style={{
+              maxWidth: 1320,
+              margin: "0 auto",
+              padding: "24px 28px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
+            {isClient && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  background: "var(--accent-subtle)",
+                  border: "1px solid var(--accent-border)",
+                }}
+              >
+                <span style={{ ...displayType, fontWeight: 700, fontSize: 12.5 }}>{D.name}</span>
+                <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
+                  client portal · white-labeled · read-only · low-relevance noise filtered
+                </span>
+                <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-tertiary)" }}>
+                  your logo + accent color here
+                </span>
+              </div>
+            )}
+            {children}
+          </div>
+        </div>
+      </div>
+
+      <AppToast />
+    </div>
+  );
+}
+
+/** Bottom-right confirmation toast (green bar, 340px, auto-dismiss 2.6s). */
+export function AppToast() {
+  const { state } = useApp();
+  if (!state.toast) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 20,
+        right: 20,
+        zIndex: 300,
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start",
+        width: 340,
+        padding: "12px 14px",
+        background: "var(--surface-overlay)",
+        border: "1px solid var(--border-default)",
+        borderRadius: 14,
+        boxShadow: "var(--shadow-popover)",
+      }}
+    >
+      <span style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: "var(--pos)", flex: "none" }} />
+      <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.45 }}>
+        {state.toast}
+      </span>
+    </div>
+  );
+}
