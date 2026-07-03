@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Archivo, IBM_Plex_Mono, Source_Serif_4 } from "next/font/google";
 import { AppProvider } from "@/lib/state";
+import { AuthProvider } from "@/lib/auth/AuthProvider";
 import "@/styles/globals.css";
 
 const archivo = Archivo({
@@ -42,7 +43,9 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <AppProvider>{children}</AppProvider>
+        <AppProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </AppProvider>
       </body>
     </html>
   );
