@@ -126,6 +126,49 @@ repo.
    domain to its IdP and returns a redirect URL to start the SAML flow. On
    success the IdP posts back to `/auth/callback`.
 
+## Passkeys (WebAuthn)
+
+Passkeys are a **primary passwordless** method (Supabase Auth, experimental):
+the browser's authenticator (Touch ID / Windows Hello / a hardware key / a phone)
+proves who you are — no password, no email round-trip.
+
+### How it works
+
+- **Sign in** uses a *discoverable credential*: the login page shows a
+  **"Sign in with a passkey"** button that calls `signInWithPasskey()` with **no
+  email or username** — the authenticator offers whichever passkeys are registered
+  for this site. On success a `SIGNED_IN` event fires and the existing
+  `onAuthStateChange` handler updates `user` (no manual session handling).
+- **Register while signed in:** you must be authenticated first, so registration
+  lives in the app shell, not on the login page. The sidebar user block shows a
+  **"Set up a passkey"** action (real Supabase users only) that calls
+  `registerPasskey()` and toasts success or the returned error. So the order is
+  always **sign in once (password/OAuth) → register a passkey → thereafter sign in
+  with the passkey**.
+- Demo mode returns a soft **"Connect Supabase to enable passkeys."** — WebAuthn
+  needs a real backend and a registered relying party.
+
+> **SSO users can't register passkeys.** This is a Supabase limitation: accounts
+> created through SAML/OIDC SSO cannot enrol a passkey.
+
+### Enabling it
+
+1. **Supabase dashboard → Authentication → Passkeys** → enable, and set:
+   - **Relying Party ID** to the bare domain `signal-room-rho.vercel.app`
+     (no scheme, no path).
+   - **RP origins** to `https://signal-room-rho.vercel.app`.
+2. In **Vercel**, set `NEXT_PUBLIC_AUTH_PASSKEY=true` and **redeploy** — it's a
+   build-time public flag, so a running deployment won't pick it up until rebuilt.
+
+### The experimental client opt-in
+
+Passkeys are experimental in `@supabase/supabase-js`, so the **browser client must
+opt in**. `src/lib/supabase/client.ts` constructs it with
+`{ auth: { experimental: { passkey: true } } }`; without this,
+`signInWithPasskey()` / `registerPasskey()` are unavailable. `passkeysEnabled`
+(on `useAuth()`) is `true` only when `mode === "supabase"` **and**
+`NEXT_PUBLIC_AUTH_PASSKEY === "true"`.
+
 ## The `/auth/callback` redirect
 
 `src/app/auth/callback/route.ts` is the return target for magic link, OAuth, and

@@ -96,6 +96,8 @@ export default function LoginPage() {
     signInWithMagicLink,
     signInWithOAuth,
     signInWithSSO,
+    passkeysEnabled,
+    signInWithPasskey,
     demoSignIn,
     ssoEnabled,
     demoCredential,
@@ -151,6 +153,20 @@ export default function LoginPage() {
       const { error } = await signInWithMagicLink(email);
       if (error) setError(error);
       else setMagicSent(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const passkey = async () => {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      // Discoverable credential — no email needed. The user→redirect effect
+      // above handles success once the SIGNED_IN event lands.
+      const { error } = await signInWithPasskey();
+      if (error) setError(error);
     } finally {
       setBusy(false);
     }
@@ -346,6 +362,33 @@ export default function LoginPage() {
             <button onClick={submit} disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>
               {busy ? "One moment…" : tab === "signin" ? "Sign in" : "Create account"}
             </button>
+
+            {passkeysEnabled && (
+              <button
+                onClick={passkey}
+                disabled={busy}
+                style={{ ...secondaryBtn, opacity: busy ? 0.6 : 1 }}
+              >
+                <svg
+                  aria-hidden
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block", flex: "none" }}
+                >
+                  <circle cx="8" cy="10" r="4" />
+                  <path d="M10.85 12.85 20 22" />
+                  <path d="m17 19 2-2" />
+                  <path d="m19 17 1.5-1.5" />
+                </svg>
+                Sign in with a passkey
+              </button>
+            )}
 
             <button
               onClick={sendMagic}

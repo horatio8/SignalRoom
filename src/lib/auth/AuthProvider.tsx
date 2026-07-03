@@ -76,6 +76,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const configured = supabaseConfigured();
   const mode = configured ? "supabase" : "demo";
   const ssoEnabled = useMemo(readSsoEnabled, []);
+  // Passkeys are meaningless in demo mode (no real WebAuthn backend). Build-time
+  // flag: NEXT_PUBLIC_AUTH_PASSKEY must be "true" AND Supabase must be configured.
+  const passkeysEnabled =
+    mode === "supabase" && process.env.NEXT_PUBLIC_AUTH_PASSKEY === "true";
 
   const [user, setUser] = useState<AuthUser | null>(null);
   const [ready, setReady] = useState(false);
@@ -285,6 +289,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [configured]
   );
 
+  const signInWithPasskey = useCallback<
+    AuthContextValue["signInWithPasskey"]
+  >(async () => {
+    if (!configured) return { error: "Connect Supabase to enable passkeys." };
+    const supabase = supabaseRef.current!;
+    // Discoverable credential — no email/username. On success a SIGNED_IN event
+    // fires and the onAuthStateChange handler above updates `user` for us.
+    const { error } = await supabase.auth.signInWithPasskey();
+    return { error: error?.message ?? null };
+  }, [configured]);
+
+  const registerPasskey = useCallback<AuthContextValue["registerPasskey"]>(
+    async () => {
+      if (!configured)
+        return { error: "Connect Supabase to enable passkeys.", id: undefined };
+      const supabase = supabaseRef.current!;
+      // User must already be signed in to register a passkey.
+      const { data, error } = await supabase.auth.registerPasskey();
+      return { error: error?.message ?? null, id: data?.id };
+    },
+    [configured]
+  );
+
   const signOut = useCallback<AuthContextValue["signOut"]>(async () => {
     if (configured) {
       await supabaseRef.current!.auth.signOut();
@@ -322,6 +349,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signInWithMagicLink,
     signInWithOAuth,
     signInWithSSO,
+    passkeysEnabled,
+    signInWithPasskey,
+    registerPasskey,
     signOut,
     demoSignIn,
     ssoEnabled,
