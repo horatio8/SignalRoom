@@ -15,6 +15,7 @@
  */
 
 export type IntegrationService =
+  | "scrapecreators"
   | "kwatch"
   | "newsdata"
   | "gnews"
@@ -30,9 +31,10 @@ export interface SurveyTool {
   envFallback: string; // platform env var name, e.g. "KWATCH_API_KEY"
 }
 
-/** The 7 SURVEYING/MONITORING tools that support BYOK, in canonical order. */
+/** The SURVEYING/MONITORING tools that support BYOK, in canonical order. */
 export const SURVEY_TOOLS: SurveyTool[] = [
-  { id: "kwatch", name: "KWatch", desc: "social webhook · primary trigger", envFallback: "KWATCH_API_KEY" },
+  { id: "scrapecreators", name: "ScrapeCreators", desc: "FB · IG · TikTok · X · YT · Reddit keyword search — primary", envFallback: "SCRAPECREATORS_API_KEY" },
+  { id: "kwatch", name: "KWatch", desc: "social webhook · optional", envFallback: "KWATCH_API_KEY" },
   { id: "newsdata", name: "NewsData", desc: "news poll · 15 min", envFallback: "NEWSDATA_API_KEY" },
   { id: "gnews", name: "GNews", desc: "news fallback", envFallback: "GNEWS_API_KEY" },
   { id: "apify", name: "Apify", desc: "TikTok + Instagram actors", envFallback: "APIFY_TOKEN" },
@@ -55,36 +57,30 @@ export interface ResolvedCredentials {
  * neither exists, `credentials` is null (source stays "platform") — the caller
  * decides whether that service is skippable or a hard error.
  *
- * PRODUCTION SHAPE: this is the real signature and the platform-env fallback is
- * implemented. The per-campaign lookup is the ONE swap point — the app still
- * runs on the mock data layer (see src/lib/data/index.ts), so the Supabase read
- * is stubbed out and clearly marked below. Wiring it is: query the row with the
- * service-role client (this bypasses RLS; keep it server-only), and if secrets
- * moved to Supabase Vault, resolve `secret_ref` through `vault.decrypted_secrets`
- * instead of reading the plain jsonb column.
+ * The per-campaign lookup reads `campaign_integrations` with the service-role
+ * client (bypasses RLS; keep it server-only). When Supabase isn't configured
+ * (local demo) it falls straight through to the platform env fallback. If
+ * secrets move to Supabase Vault, resolve `secret_ref` through
+ * `vault.decrypted_secrets` instead of reading the plain jsonb column.
  */
 export async function resolveCredentials(
   campaignId: string,
   service: IntegrationService
 ): Promise<ResolvedCredentials> {
-  // ---- SWAP POINT: per-campaign BYOK lookup ----
-  // Production implementation (service-role, server-only):
-  //
-  //   const { data } = await supabaseAdmin
-  //     .from("campaign_integrations")
-  //     .select("credentials")
-  //     .eq("campaign_id", campaignId)
-  //     .eq("service", service)
-  //     .eq("is_active", true)
-  //     .maybeSingle();
-  //   if (data?.credentials) {
-  //     return { source: "campaign", credentials: data.credentials };
-  //   }
-  //
-  // Until the data layer is swapped there is no store to read, so we fall
-  // straight through to the platform env fallback. `campaignId` is referenced
-  // to keep the production signature honest.
-  void campaignId;
+  // ---- Per-campaign BYOK lookup (campaign key wins) ----
+  const admin = (await import("@/lib/supabase/admin")).supabaseAdmin();
+  if (admin) {
+    const { data } = await admin
+      .from("campaign_integrations")
+      .select("credentials")
+      .eq("campaign_id", campaignId)
+      .eq("service", service)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (data?.credentials) {
+      return { source: "campaign", credentials: data.credentials };
+    }
+  }
 
   // ---- Platform env fallback (implemented) ----
   const tool = SURVEY_TOOLS.find((t) => t.id === service);
