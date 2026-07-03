@@ -38,24 +38,134 @@ The single Postgres database (RLS multi-tenant), magic-link auth, and storage.
 
 ## 2. Anthropic API (enrichment, briefings, alerts, responses)
 
-- Haiku: per-mention enrichment (relevance/sentiment/entities, §5) and alert
-  situation reads (§7). Sonnet: daily briefings (§6), the three response
-  drafts (§14), and the S12 grid regeneration.
+- Enrichment is **built** (`src/lib/enrich/index.ts`): one forced-tool call per
+  batch of 10 un-enriched mentions writes back relevance / sentiment / entities
+  / topics / narrative theme / message-box quadrant, and assigns clusters. It
+  runs on the model in `ENRICH_MODEL` (default `claude-sonnet-5`) and is driven
+  by the enrich cron (`/api/cron/enrich`, every 15 min — see §7). Later phases
+  add Sonnet for daily briefings (§6), the three response drafts (§14), and the
+  S12 grid regeneration.
 - Get a key at [console.anthropic.com](https://console.anthropic.com) →
   `ANTHROPIC_API_KEY`.
-- Use the Batch API for enrichment (50% cost cut, §5). Keep per-campaign LLM
-  spend ≤ $40/mo (§9) — the admin cost meters exist to watch this.
+- Keep per-campaign LLM spend ≤ $40/mo (§9) — the admin cost meters exist to
+  watch this. The Batch API (50% cost cut, §5) is a future optimization; the
+  current worker uses synchronous calls for freshness.
 - Prompts are versioned artifacts: store them under `/prompts` in this repo
   and write `prompt_version` + `model` on every AI output row (§2 principle 4).
 
 ## 3. Ingest sources (spec §4)
 
-Each adapter is one Vercel route: `/api/ingest/<source>`, authenticated by a
-per-source shared secret header `x-ingest-key` (generate long random strings;
-rotate quarterly per §9). All adapters normalize into `mentions` and dedupe
-via the unique `(campaign_id, source, external_id)` index + url/content hash.
+Two adapter shapes feed `mentions`. The **built** path is ScrapeCreators: a
+poll-based runner driven by the ingest cron (no webhook — ScrapeCreators has no
+push). The **planned** paths (NewsData, GNews, Apify, Bluesky, RSS, PodcastIndex,
+and the optional-legacy KWatch) are each one Vercel route `/api/ingest/<source>`
+authenticated by a per-source shared secret header `x-ingest-key` (generate long
+random strings; rotate quarterly per §9). Every adapter normalizes into
+`mentions` and dedupes via the unique `(campaign_id, source, external_id)` index
++ url/content hash.
 
-### KWatch.io — primary social trigger (push, seconds)
+### ScrapeCreators — primary keyword search (built; cron poll)
+
+The primary keyword-search source, replacing the previously-planned KWatch as
+the default trigger. The runner (`src/lib/ingest/index.ts` +
+`scrapecreators.ts`) sweeps every **active campaign × active keyword ×
+platform**, one GET per combination, normalizes results into `mentions`, and
+upserts with `ignoreDuplicates` so re-polls no-op against the unique index.
+
+**What it is.** [scrapecreators.com](https://scrapecreators.com) — pay-as-you-go
+scraping API. Key from [app.scrapecreators.com](https://app.scrapecreators.com),
+sent as the `x-api-key` header. **1 credit per request**, credits never expire,
+no monthly commitment. Poll-only — there are **no webhooks**, so freshness is a
+function of cron cadence, not push. Typical request latency 2–4s. Tiers (July
+2026): ~$10/mo Solo (~5k credits), $47/mo Freelance (25k), $497/mo Business
+(500k); pay-as-you-go top-ups on any tier.
+
+**Platform coverage.** The runner's default platform set (`INGEST_PLATFORMS`,
+default `reddit,youtube,tiktok,threads,instagram`) covers keyword search on:
+- **TikTok, YouTube, Reddit** — full keyword search.
+- **Threads** — keyword search, but max 10 results per call.
+- **Instagram** — reels/hashtag search, backed by a Google index, so freshness
+  lags and results are best-effort.
+
+LinkedIn keyword search also exists at ScrapeCreators (Google-indexed) but is
+**not yet wired** into the runner.
+
+**What ScrapeCreators cannot do — be blunt about it.** There is **no X/Twitter
+keyword search** and **no Facebook keyword post search** anywhere in the API, so
+neither is covered. ScrapeCreators *can* still pull a specific X profile's
+tweets and specific Facebook pages/groups by id (a watched-accounts pattern —
+not yet wired) and search the Facebook Ad Library. It cannot see private/closed
+Facebook groups, and no commercial product can — keep that expectation honest.
+
+**Filling the gaps (options, not yet wired).** If X or public Facebook keyword
+mentions matter for a campaign, supplement:
+- **Syften** (~$35/mo) — X + Reddit + Hacker News + Bluesky keyword mentions
+  delivered by webhook. The intended source for X.
+- **Apify** actor `scrapeforge/facebook-search-posts` (~$2.59 per 1,000
+  results) — public Facebook keyword posts. (`APIFY_TOKEN` already exists for
+  the TikTok/Instagram actors below.)
+
+Both would land through the normal `mentions` pipeline once adapters exist.
+
+**Cost math (default cadence).** Ingest runs hourly and each run is capped at
+`INGEST_MAX_REQUESTS` (default 60) requests → a hard ceiling of ~43,200
+credits/month. A realistic single campaign (5 platforms × 8 keywords = 40
+credits/run) lands around **29k credits/month**. That sits just above the
+Freelance tier's 25k credits, so one campaign runs on **Freelance ($47)** plus
+pay-as-you-go top-ups (credits never expire, so the margin is cheap). The
+**Business tier ($497, 500k credits)** comfortably covers ~6 campaigns at the
+same hourly cadence.
+
+**Runner behaviour worth knowing.** Keywords are capped at 20 per campaign per
+run. A `402` (out of credits) aborts that campaign's remaining calls cleanly; a
+single bad platform×keyword is logged, counted, and skipped without killing the
+run. The global request cap stops the sweep mid-run and reports `capped: true`.
+
+**Go live end-to-end (runbook).**
+1. Sign up at [scrapecreators.com](https://scrapecreators.com); copy your key
+   from [app.scrapecreators.com](https://app.scrapecreators.com).
+2. Set Vercel env vars (Project → Settings → Environment Variables, server
+   scope):
+   - `SCRAPECREATORS_API_KEY` — the key from step 1.
+   - `CRON_SECRET` — `openssl rand -hex 32`; the cron routes reject anything but
+     `Authorization: Bearer <CRON_SECRET>`.
+   - `SUPABASE_SERVICE_ROLE_KEY` — the `sb_secret_…` **secret key** from
+     Supabase → Settings → API Keys. (The `sb_publishable_…` key is your
+     `NEXT_PUBLIC_SUPABASE_ANON_KEY`, not this one.)
+   - `ANTHROPIC_API_KEY` — already set for enrichment.
+   - Optional tuning: `ENRICH_MODEL`, `INGEST_PLATFORMS`, `INGEST_MAX_REQUESTS`.
+3. Redeploy so the new env is live.
+4. Insert active keywords for the campaign. Example for the `voss` campaign — a
+   candidate term, an opponent term, and two issue terms:
+   ```sql
+   insert into keywords (campaign_id, term, kind, segment, is_active)
+   select c.id, k.term, k.kind, k.segment, true
+   from campaigns c
+   join (values
+     ('Senator Voss',    'candidate', 'candidate'),
+     ('Hale',            'opponent',  'opponent'),
+     ('border security', 'issue',     'border'),
+     ('water rights',    'issue',     'water')
+   ) as k(term, kind, segment) on true
+   where c.slug = 'voss';
+   ```
+5. Crons run automatically — ingest hourly (`0 * * * *`), enrich at `:00/:15/
+   :30/:45` (`*/15 * * * *`). To trigger once manually:
+   ```bash
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://signal-room-rho.vercel.app/api/cron/ingest
+   curl -H "Authorization: Bearer $CRON_SECRET" \
+     https://signal-room-rho.vercel.app/api/cron/enrich
+   ```
+6. Sign in and open `/voss/feed`. Once `mentions` rows exist, the feed switches
+   from fixtures to live rows automatically and shows the "live · N mentions"
+   indicator (RLS scopes what each signed-in member sees — see §Backend live
+   read path in docs/BACKEND.md).
+
+### KWatch.io — optional legacy social webhook
+
+No longer the primary trigger; kept as an optional supplementary source. If you
+still want its push (sub-second) social alerts alongside ScrapeCreators:
 1. Sign up at kwatch.io; create **one alert per campaign keyword group**
    (the S6 "Push to sources" button maintains these via their API).
 2. Point each alert's webhook at
@@ -112,13 +222,18 @@ their own NewsData quota, their own Meta Ad Library token — can supply
 per-campaign credentials instead.
 
 - **Services that support BYOK** (the SURVEYING/MONITORING tools):
-  `kwatch`, `newsdata`, `gnews`, `apify`, `meta_ad_library`, `firecrawl`,
-  `podcastindex`. Delivery/publish tools (Zernio, Resend, Cellcast) stay
+  `scrapecreators`, `kwatch`, `newsdata`, `gnews`, `apify`, `meta_ad_library`,
+  `firecrawl`, `podcastindex`. ScrapeCreators is BYOK-capable per campaign like
+  the rest — a client can supply their own ScrapeCreators key so its credits
+  bill to their account. Delivery/publish tools (Zernio, Resend, Cellcast) stay
   **platform-level** for now — they are our sending identity, not the client's.
 - **How resolution works:** the campaign's active row in `campaign_integrations`
   wins; when there is none the adapter falls back to the platform env var. This
-  is `resolveCredentials(campaignId, service)` in `src/lib/integrations.ts`
-  (server-only — never import it from a client component).
+  is `resolveCredentials(campaignId, service)` in
+  `src/lib/integrations.server.ts` (the client-safe catalog `SURVEY_TOOLS` lives
+  in `src/lib/integrations.ts`; the resolver is `server-only` — never import it
+  from a client component). The ingest runner already resolves ScrapeCreators
+  credentials this way per campaign before each sweep.
 - **Where operators enter them:** S6 Settings → **Client integrations** card.
   Owner/operator only; `client_viewer` never sees this card or the rows.
 - **Storage / encryption:** credentials land in `campaign_integrations.credentials`
@@ -198,9 +313,11 @@ and the runbook's ground rules (no sock puppets, one strike, vary + stagger).
    GitHub repo for deploy-on-push.
 2. Add every env var from `.env.example` in Project → Settings → Environment
    Variables (service keys as **server** env only).
-3. Crons in `vercel.json`: enrichment worker (`*/5`), spike detector (`*/5`),
-   newsdata/rss polls (`*/15`), briefing generator (hourly), opponent-ads
-   pull (daily), cluster label/close (nightly).
+3. Crons registered in `vercel.json` today: **ingest** (`/api/cron/ingest`,
+   hourly `0 * * * *`) and **enrichment** (`/api/cron/enrich`, every 15 min
+   `*/15 * * * *`). Both require `Authorization: Bearer $CRON_SECRET`. Planned
+   additions as those workers land: spike detector, news/RSS polls, briefing
+   generator (hourly), opponent-ads pull (daily), cluster label/close (nightly).
 
 ## 8. Stripe (Phase 3 billing)
 
@@ -224,10 +341,14 @@ and the runbook's ground rules (no sock puppets, one strike, vary + stagger).
 
 | Env var | Service | Where used |
 |---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase | client |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase | server only |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase | client (anon = `sb_publishable_…`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase | server only (the `sb_secret_…` key) |
 | `ANTHROPIC_API_KEY` | Anthropic | workers |
-| `KWATCH_API_KEY`, `INGEST_KEY_KWATCH` | KWatch | config push / webhook auth |
+| `ENRICH_MODEL` | Anthropic | optional — enrich model override (default `claude-sonnet-5`) |
+| `CRON_SECRET` | Vercel Cron | ingest + enrich route auth (`openssl rand -hex 32`) |
+| `SCRAPECREATORS_API_KEY` | ScrapeCreators | primary keyword-search ingest |
+| `INGEST_PLATFORMS`, `INGEST_MAX_REQUESTS` | ingest runner | optional tuning (defaults `reddit,youtube,tiktok,threads,instagram` / `60`) |
+| `KWATCH_API_KEY`, `INGEST_KEY_KWATCH` | KWatch (optional legacy) | config push / webhook auth |
 | `NEWSDATA_API_KEY`, `GNEWS_API_KEY` | news polls | cron |
 | `APIFY_TOKEN`, `INGEST_KEY_APIFY` | Apify | actors / webhook auth |
 | `INGEST_KEY_BLUESKY`, `INGEST_KEY_RSS`, `INGEST_KEY_MANUAL` | ingest auth | webhooks |
