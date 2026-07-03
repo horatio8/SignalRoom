@@ -1,16 +1,25 @@
 /**
- * Ingest runner (§ingest). Orchestrates the ScrapeCreators keyword-search
- * adapter across every active campaign: resolves per-campaign credentials
- * (BYOK, platform-env fallback), loads active keywords, and sweeps a
- * platform×keyword grid sequentially — politeness plus serverless simplicity,
- * and we stay well under any concurrency limit for free. Normalized rows are
- * upserted into `mentions` with ignoreDuplicates so re-polls no-op against the
- * (campaign_id, source, external_id) unique index.
+ * Ingest runner (§ingest). Orchestrates three keyword-search sources across
+ * every active campaign, resolving per-campaign credentials (BYOK, platform-env
+ * fallback) and loading active keywords once, shared by all sources. Normalized
+ * rows are upserted into `mentions` with ignoreDuplicates so re-polls no-op
+ * against the (campaign_id, source, external_id) unique index.
+ *
+ * SOURCE ROUTING — dedupe is per (campaign_id, source, external_id), so each
+ * platform must be owned by exactly one source or the same post lands twice
+ * under different sources. Per campaign:
+ *   • ScrapeCreators sweeps the social platform×keyword grid as today.
+ *   • EnsembleData, when the campaign keys it, TAKES OVER TikTok: "tiktok" is
+ *     removed from the ScrapeCreators sweep and polled via EnsembleData instead.
+ *   • NewsData, when keyed, runs ONE batched OR query per campaign (all keywords
+ *     in a single request) — the news credit saver.
  *
  * Budget guards: a global request cap per run (INGEST_MAX_REQUESTS) stops the
- * sweep cleanly, and a 402 (out of credits) aborts the current campaign's
- * remaining calls — no point burning retries. One bad platform×keyword logs,
- * counts, and continues; it never kills the run.
+ * run cleanly and is shared across all three sources. Out-of-credit signals are
+ * scoped to their own source — ScrapeCreators 402, EnsembleData 493/495, and
+ * NewsData 429 each abort only that source's remaining calls for the campaign,
+ * never the others. One bad request logs, counts, and continues; it never kills
+ * the run.
  *
  * SERVER-ONLY: uses the service-role Supabase client and resolves secrets.
  */
@@ -18,11 +27,15 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { resolveCredentials } from "@/lib/integrations.server";
 import { searchPlatform, ScrapeCreatorsError } from "./scrapecreators";
+import { searchTikTok, EnsembleDataError } from "./ensembledata";
+import { searchNews, NewsDataError } from "./newsdata";
 import type {
   CampaignSummary,
   IngestError,
   IngestPlatform,
+  IngestSource,
   NormalizedMention,
+  NormalizedMentionInput,
   Summary,
 } from "./types";
 
@@ -58,9 +71,15 @@ function resolveMaxRequests(): number {
 interface CampaignRow {
   id: string;
   slug: string;
+  country: string | null;
 }
 interface KeywordRow {
   term: string;
+}
+
+/** NewsData country param, or undefined when the campaign has no valid one. */
+function newsCountry(country: string | null): string | undefined {
+  return country === "AU" || country === "US" ? country : undefined;
 }
 
 /**
@@ -80,7 +99,7 @@ export async function runIngest(): Promise<Summary> {
 
   const { data: campaigns, error: campaignsError } = await admin
     .from("campaigns")
-    .select("id, slug")
+    .select("id, slug, country")
     .eq("status", "active");
   if (campaignsError) {
     throw new Error(`ingest: failed to load campaigns — ${campaignsError.message}`);
@@ -97,18 +116,26 @@ export async function runIngest(): Promise<Summary> {
     const campaignSummary: CampaignSummary = {
       slug: campaign.slug,
       requests: 0,
+      requestsBySource: { scrapecreators: 0, ensembledata: 0, newsdata: 0 },
       inserted: 0,
       skippedDuplicates: 0,
       errors: [],
     };
     summary.campaigns.push(campaignSummary);
 
-    // ---- credentials (campaign BYOK wins; skip when neither key exists) ----
-    const { credentials } = await resolveCredentials(campaign.id, "scrapecreators");
-    const apiKey = credentials?.api_key;
-    if (!apiKey) {
+    // ---- credentials for all three sources (campaign BYOK wins per service) ----
+    const [scCreds, edCreds, ndCreds] = await Promise.all([
+      resolveCredentials(campaign.id, "scrapecreators"),
+      resolveCredentials(campaign.id, "ensembledata"),
+      resolveCredentials(campaign.id, "newsdata"),
+    ]);
+    const scKey = scCreds.credentials?.api_key ?? null;
+    const edKey = edCreds.credentials?.api_key ?? null;
+    const ndKey = ndCreds.credentials?.api_key ?? null;
+    if (!scKey && !edKey && !ndKey) {
       console.log(`${LOG_PREFIX} skip ${campaign.slug}: no credentials`);
       campaignSummary.errors.push({
+        source: "scrapecreators",
         platform: "reddit",
         keyword: "*",
         message: "no credentials",
@@ -116,7 +143,7 @@ export async function runIngest(): Promise<Summary> {
       continue;
     }
 
-    // ---- active keywords (cap at 20) ----
+    // ---- active keywords (cap at 20), shared by every source ----
     const { data: keywords, error: keywordsError } = await admin
       .from("keywords")
       .select("term")
@@ -124,6 +151,7 @@ export async function runIngest(): Promise<Summary> {
       .eq("is_active", true);
     if (keywordsError) {
       campaignSummary.errors.push({
+        source: "scrapecreators",
         platform: "reddit",
         keyword: "*",
         message: `failed to load keywords — ${keywordsError.message}`,
@@ -140,66 +168,139 @@ export async function runIngest(): Promise<Summary> {
     }
     const capped = terms.slice(0, KEYWORD_CAP);
 
-    // ---- sequential platform × keyword sweep ----
-    let campaignAborted = false; // set on 402
-    for (const platform of platforms) {
-      if (campaignAborted) break;
+    // ---- source routing: EnsembleData takes over TikTok when keyed ----
+    const useEnsembleForTikTok = edKey !== null;
+    const scPlatforms = useEnsembleForTikTok
+      ? platforms.filter((p) => p !== "tiktok")
+      : platforms;
+    if (useEnsembleForTikTok && platforms.includes("tiktok")) {
+      console.log(
+        `${LOG_PREFIX} ${campaign.slug}: routing tiktok → ensembledata (removed from scrapecreators sweep)`
+      );
+    }
+
+    // Upsert normalized rows and update the campaign's insert/duplicate counts.
+    // With ignoreDuplicates, only newly-inserted rows return, so `inserted` is
+    // exact and `skippedDuplicates` is a best-effort attempted-minus-returned
+    // (also counts any rows the DB dropped for other reasons).
+    const persist = async (rows: NormalizedMentionInput[]): Promise<void> => {
+      if (rows.length === 0) return;
+      const toInsert: NormalizedMention[] = rows.map((r) => ({
+        ...r,
+        campaign_id: campaign.id,
+      }));
+      const { data: insertedRows, error: insertError } = await admin
+        .from("mentions")
+        .upsert(toInsert, {
+          onConflict: "campaign_id,source,external_id",
+          ignoreDuplicates: true,
+        })
+        .select("id");
+      if (insertError) throw insertError;
+      const insertedCount = insertedRows?.length ?? 0;
+      campaignSummary.inserted += insertedCount;
+      campaignSummary.skippedDuplicates += Math.max(
+        0,
+        toInsert.length - insertedCount
+      );
+    };
+
+    // Record a source failure, log it, and report whether it was out-of-credits.
+    const recordError = (
+      source: IngestSource,
+      platform: IngestError["platform"],
+      keyword: string,
+      err: unknown
+    ): boolean => {
+      const message = err instanceof Error ? err.message : String(err);
+      campaignSummary.errors.push({ source, platform, keyword, message });
+      console.log(
+        `${LOG_PREFIX} error ${campaign.slug}/${source}/${platform}/${keyword}: ${message}`
+      );
+      return (
+        (err instanceof ScrapeCreatorsError && err.outOfCredits) ||
+        (err instanceof EnsembleDataError && err.outOfUnits) ||
+        (err instanceof NewsDataError && err.outOfCredits)
+      );
+    };
+
+    // ---- ScrapeCreators: social platform × keyword sweep (minus TikTok when
+    //      EnsembleData owns it) ----
+    let scAborted = false; // set on 402
+    if (scKey) {
+      for (const platform of scPlatforms) {
+        if (scAborted) break;
+        for (const keyword of capped) {
+          if (summary.totalRequests >= maxRequests) {
+            summary.capped = true;
+            break;
+          }
+          summary.totalRequests += 1;
+          campaignSummary.requests += 1;
+          campaignSummary.requestsBySource.scrapecreators += 1;
+          try {
+            await persist(await searchPlatform(scKey, platform, keyword));
+          } catch (err) {
+            if (recordError("scrapecreators", platform, keyword, err)) {
+              console.log(
+                `${LOG_PREFIX} ${campaign.slug}: scrapecreators out of credits, aborting source`
+              );
+              scAborted = true;
+              break;
+            }
+          }
+        }
+        if (summary.totalRequests >= maxRequests) {
+          summary.capped = true;
+          break;
+        }
+      }
+    }
+
+    // ---- EnsembleData: TikTok keyword sweep (owns TikTok when keyed) ----
+    let edAborted = false; // set on 493/495
+    if (edKey) {
       for (const keyword of capped) {
+        if (edAborted) break;
         if (summary.totalRequests >= maxRequests) {
           summary.capped = true;
           break;
         }
         summary.totalRequests += 1;
         campaignSummary.requests += 1;
-
+        campaignSummary.requestsBySource.ensembledata += 1;
         try {
-          const rows = await searchPlatform(apiKey, platform, keyword);
-          if (rows.length === 0) continue;
-
-          const toInsert: NormalizedMention[] = rows.map((r) => ({
-            ...r,
-            campaign_id: campaign.id,
-          }));
-
-          const { data: insertedRows, error: insertError } = await admin
-            .from("mentions")
-            .upsert(toInsert, {
-              onConflict: "campaign_id,source,external_id",
-              ignoreDuplicates: true,
-            })
-            .select("id");
-          if (insertError) throw insertError;
-
-          // With ignoreDuplicates, only newly-inserted rows come back in
-          // `insertedRows`; conflicting rows are silently skipped. So inserted
-          // is exact, and skippedDuplicates is a best-effort attempted-minus-
-          // returned (also counts any rows the DB dropped for other reasons).
-          const insertedCount = insertedRows?.length ?? 0;
-          campaignSummary.inserted += insertedCount;
-          campaignSummary.skippedDuplicates += Math.max(
-            0,
-            toInsert.length - insertedCount
-          );
+          await persist(await searchTikTok(edKey, keyword));
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const ingestError: IngestError = { platform, keyword, message };
-          campaignSummary.errors.push(ingestError);
-          console.log(
-            `${LOG_PREFIX} error ${campaign.slug}/${platform}/${keyword}: ${message}`
-          );
-          // 402 → out of credits: abort this campaign's remaining calls.
-          if (err instanceof ScrapeCreatorsError && err.outOfCredits) {
+          if (recordError("ensembledata", "tiktok", keyword, err)) {
             console.log(
-              `${LOG_PREFIX} ${campaign.slug}: out of credits, aborting campaign`
+              `${LOG_PREFIX} ${campaign.slug}: ensembledata out of units, aborting source`
             );
-            campaignAborted = true;
+            edAborted = true;
             break;
           }
         }
       }
+    }
+
+    // ---- NewsData: one batched OR query per campaign ----
+    if (ndKey && capped.length > 0) {
       if (summary.totalRequests >= maxRequests) {
         summary.capped = true;
-        break;
+      } else {
+        summary.totalRequests += 1;
+        campaignSummary.requests += 1;
+        campaignSummary.requestsBySource.newsdata += 1;
+        try {
+          await persist(
+            await searchNews(ndKey, capped, newsCountry(campaign.country))
+          );
+        } catch (err) {
+          // A 429 out-of-credits is already isolated: the single batched call
+          // is this source's only work for the campaign, so there is nothing
+          // further to abort.
+          recordError("newsdata", "news", "*", err);
+        }
       }
     }
   }

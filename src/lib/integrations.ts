@@ -13,6 +13,7 @@
 
 export type IntegrationService =
   | "scrapecreators"
+  | "ensembledata"
   | "kwatch"
   | "newsdata"
   | "gnews"
@@ -31,6 +32,7 @@ export interface SurveyTool {
 /** The SURVEYING/MONITORING tools that support BYOK, in canonical order. */
 export const SURVEY_TOOLS: SurveyTool[] = [
   { id: "scrapecreators", name: "ScrapeCreators", desc: "FB · IG · TikTok · X · YT · Reddit keyword search — primary", envFallback: "SCRAPECREATORS_API_KEY" },
+  { id: "ensembledata", name: "EnsembleData", desc: "TikTok keyword search · unit-based", envFallback: "ENSEMBLEDATA_API_KEY" },
   { id: "kwatch", name: "KWatch", desc: "social webhook · optional", envFallback: "KWATCH_API_KEY" },
   { id: "newsdata", name: "NewsData", desc: "news poll · 15 min", envFallback: "NEWSDATA_API_KEY" },
   { id: "gnews", name: "GNews", desc: "news fallback", envFallback: "GNEWS_API_KEY" },
