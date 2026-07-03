@@ -135,8 +135,13 @@ run. The global request cap stops the sweep mid-run and reports `capped: true`.
    - `ANTHROPIC_API_KEY` — already set for enrichment.
    - Optional tuning: `ENRICH_MODEL`, `INGEST_PLATFORMS`, `INGEST_MAX_REQUESTS`.
 3. Redeploy so the new env is live.
-4. Insert active keywords for the campaign. Example for the `voss` campaign — a
-   candidate term, an opponent term, and two issue terms:
+4. Add active keywords for the campaign. The primary path is now in the app:
+   sign in as an owner or operator, open **Settings → Monitoring** (`/voss/
+   settings`) and add each term with its kind (candidate / opponent / issue /
+   misspelling). Rows write straight to the `keywords` table under RLS and apply
+   at the next hourly sweep — there is no push step. For bulk seeding you can
+   still insert directly. Example for the `voss` campaign — a candidate term, an
+   opponent term, and two issue terms:
    ```sql
    insert into keywords (campaign_id, term, kind, segment, is_active)
    select c.id, k.term, k.kind, k.segment, true
