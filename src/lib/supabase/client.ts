@@ -12,7 +12,11 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** True when the public Supabase env is present (auth ENFORCES; else demo). */
+/**
+ * True when the public Supabase env is present (auth ENFORCES; else demo).
+ * NEXT_PUBLIC_* values are inlined at build time — changing them in Vercel
+ * requires a fresh build to take effect.
+ */
 export function supabaseConfigured(): boolean {
   return !!(
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
