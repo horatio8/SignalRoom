@@ -32,7 +32,10 @@ export function createClient(): SupabaseClient | null {
   if (browserClient) return browserClient;
   browserClient = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    // Opt in to experimental passkeys (WebAuthn). Required for
+    // supabase.auth.signInWithPasskey()/registerPasskey(). See docs/AUTH.md.
+    { auth: { experimental: { passkey: true } } }
   );
   return browserClient;
 }

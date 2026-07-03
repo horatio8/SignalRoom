@@ -50,6 +50,12 @@ export interface AuthContextValue {
   ): Promise<{ error: string | null }>;
   /** SAML/OIDC by email domain (Supabase Auth signInWithSSO). */
   signInWithSSO(domain: string): Promise<{ error: string | null }>;
+  /** Passkeys (WebAuthn) available: supabase mode + NEXT_PUBLIC_AUTH_PASSKEY. */
+  passkeysEnabled: boolean;
+  /** Discoverable-credential sign-in — no email/username needed. */
+  signInWithPasskey(): Promise<{ error: string | null }>;
+  /** Register a passkey for the current user (must be signed in first). */
+  registerPasskey(): Promise<{ error: string | null; id?: string }>;
   signOut(): Promise<void>;
   /** Demo mode only: set a demo user with the given role instantly. */
   demoSignIn(role?: AuthRole): void;

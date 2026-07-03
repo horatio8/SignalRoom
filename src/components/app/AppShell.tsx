@@ -39,8 +39,8 @@ export function AppShell({
   campaign: CampaignId;
   children: React.ReactNode;
 }) {
-  const { state, set } = useApp();
-  const { mode, user, signOut } = useAuth();
+  const { state, set, notify } = useApp();
+  const { mode, user, signOut, passkeysEnabled, registerPasskey } = useAuth();
   const router = useRouter();
   const { role, dark } = state;
   const D = dataFor(campaign);
@@ -115,6 +115,13 @@ export function AppShell({
   const handleSignOut = async () => {
     await signOut();
     router.push("/login");
+  };
+
+  // Register a passkey for the current (real) user. Requires being signed in.
+  const canSetUpPasskey = passkeysEnabled && !!realUser;
+  const handleRegisterPasskey = async () => {
+    const { error } = await registerPasskey();
+    notify(error ?? "Passkey registered — you can now sign in with it");
   };
 
   return (
@@ -333,6 +340,47 @@ export function AppShell({
               }}
             >
               + New campaign
+            </button>
+          )}
+          {canSetUpPasskey && (
+            <button
+              onClick={handleRegisterPasskey}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                height: 30,
+                padding: "0 12px",
+                marginTop: 4,
+                borderRadius: 8,
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                textAlign: "left",
+                fontFamily: "var(--font-ui)",
+                fontSize: 12,
+                fontWeight: 500,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <svg
+                aria-hidden
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{ display: "block", flex: "none" }}
+              >
+                <circle cx="8" cy="10" r="4" />
+                <path d="M10.85 12.85 20 22" />
+                <path d="m17 19 2-2" />
+                <path d="m19 17 1.5-1.5" />
+              </svg>
+              Set up a passkey
             </button>
           )}
           <button
