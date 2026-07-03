@@ -124,6 +124,15 @@ export interface AppState {
   briefSel: number;
   rcInput: string;
   toast: string;
+  /**
+   * Per-campaign bring-your-own API keys for the surveying tools, keyed by
+   * campaign then by IntegrationService id. Kept per campaign so switching the
+   * campaign switcher surfaces each campaign's own keys (and is deliberately
+   * excluded from campaignResetPatch so keys survive the switch).
+   * Production: campaign_integrations table (campaign_id, service, encrypted
+   * secret), resolved server-side before the platform key — see src/lib/integrations.ts.
+   */
+  byoKeys: Partial<Record<CampaignId, Partial<Record<string, string>>>>;
 }
 
 export const initialState: AppState = {
@@ -173,6 +182,7 @@ export const initialState: AppState = {
   briefSel: 0,
   rcInput: "",
   toast: "",
+  byoKeys: {},
 };
 
 /** The keys the prototype resets when the campaign switcher changes. */

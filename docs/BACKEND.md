@@ -36,6 +36,7 @@ and all interactive state through `src/lib/state.tsx`. To go live:
 | S12 grid/drivers/actions | SQL aggregates over theme-classified mentions + `campaigns.message_platform`; `narrative_grids` versioned rows (auto vs strategy source) |
 | `dark` toggle | user preference (already persisted per user via localStorage; move to profile if desired) |
 | `vote` (briefing feedback) | `briefing_feedback` (§6 quality loop) |
+| `byoKeys` (Settings client-integrations card) | `campaign_integrations` + `resolveCredentials()` fallback (campaign key wins, platform env is fallback) |
 
 ## Screen → query mapping
 
@@ -55,7 +56,9 @@ and all interactive state through `src/lib/state.tsx`. To go live:
   `alert_rules`; M3 recipients are plain addresses inside `channels`.
 - **S6 Settings** — `keywords` CRUD; "Push to sources" calls KWatch/Apify
   config APIs; source health from ingest counters (§9 observability);
-  recipients + briefing hours on `campaigns` / `alert_rules`.
+  recipients + briefing hours on `campaigns` / `alert_rules`; per-client BYOK
+  keys on `campaign_integrations` (resolved via `resolveCredentials()`,
+  owner/operator only).
 - **S7 Admin** — cross-campaign counters: ingest per source/hour, queue depth
   (`enriched_at is null`), duplicate rate, LLM spend meters, golden-set eval
   (§9). Owner-only route.

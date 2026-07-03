@@ -12,11 +12,49 @@ import { useApp, type CampaignId } from "@/lib/state";
 import { dataFor, sourceHealth } from "@/lib/data";
 import { Switch } from "@/components/ds";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
+import { SURVEY_TOOLS } from "@/lib/integrations";
 
 export default function SettingsPage() {
   const { campaign } = useParams<{ campaign: CampaignId }>();
   const { state, set, notify } = useApp();
   const D = dataFor(campaign);
+
+  // Which integration's inline key input is open (only one at a time) + its
+  // draft text. The saved keys live in the app context (state.byoKeys); this is
+  // purely the transient editing surface.
+  const [keyOpen, setKeyOpen] = React.useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = React.useState("");
+
+  const campaignKeys = state.byoKeys[campaign] ?? {};
+
+  const saveKey = (service: string, name: string) => {
+    const val = keyDraft.trim();
+    if (!val) return;
+    set((s) => ({
+      byoKeys: {
+        ...s.byoKeys,
+        [campaign]: { ...(s.byoKeys[campaign] ?? {}), [service]: val },
+      },
+    }));
+    setKeyOpen(null);
+    setKeyDraft("");
+    notify(`Client key saved for ${name} — used instead of the platform key on the next run`);
+  };
+
+  const removeKey = (service: string, name: string) => {
+    set((s) => {
+      const next = { ...(s.byoKeys[campaign] ?? {}) };
+      delete next[service];
+      return { byoKeys: { ...s.byoKeys, [campaign]: next } };
+    });
+    if (keyOpen === service) {
+      setKeyOpen(null);
+      setKeyDraft("");
+    }
+    notify(`Client key removed — ${name} falls back to the platform key`);
+  };
+
+  const maskKey = (v: string) => "••••" + v.slice(-4);
 
   const keywords = [...D.keywords, ...state.customKeywords];
   const recipients = [...D.recipients, ...state.addedRecipients];
@@ -390,6 +428,179 @@ export default function SettingsPage() {
                   Add
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* Client integrations */}
+          <div style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>Client integrations</span>
+              <span style={{ ...monoMeta, marginLeft: "auto" }}>client keys override platform keys</span>
+            </div>
+            <span style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--text-secondary)" }}>
+              Campaigns can bring their own credentials for the surveying tools. Stored per campaign, encrypted at rest —
+              used before the platform key.
+            </span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {SURVEY_TOOLS.map((tool) => {
+                const stored = campaignKeys[tool.id];
+                const open = keyOpen === tool.id;
+                return (
+                  <div
+                    key={tool.id}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "var(--surface-raised)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{tool.name}</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--text-tertiary)" }}>
+                          {tool.desc}
+                        </span>
+                      </div>
+                      <span
+                        style={{
+                          flex: "none",
+                          fontSize: 10,
+                          fontWeight: 500,
+                          padding: "2px 8px",
+                          borderRadius: 6,
+                          background: stored ? "var(--pos-subtle)" : "var(--surface-raised)",
+                          color: stored ? "var(--pos-text)" : "var(--text-secondary)",
+                        }}
+                      >
+                        {stored ? "client key" : "platform key"}
+                      </span>
+                      {stored ? (
+                        <>
+                          <span
+                            style={{
+                              flex: "none",
+                              fontFamily: "var(--font-mono)",
+                              fontSize: 10.5,
+                              color: "var(--text-tertiary)",
+                            }}
+                          >
+                            {maskKey(stored)}
+                          </span>
+                          <button
+                            onClick={() => removeKey(tool.id, tool.name)}
+                            style={{
+                              flex: "none",
+                              border: "none",
+                              background: "none",
+                              padding: 0,
+                              fontFamily: "var(--font-ui)",
+                              fontSize: 11,
+                              color: "var(--text-tertiary)",
+                              textDecoration: "underline",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        !open && (
+                          <button
+                            onClick={() => {
+                              setKeyOpen(tool.id);
+                              setKeyDraft("");
+                            }}
+                            style={{
+                              flex: "none",
+                              border: "none",
+                              background: "none",
+                              padding: 0,
+                              fontFamily: "var(--font-ui)",
+                              fontSize: 11,
+                              color: "var(--accent-text)",
+                              textDecoration: "underline",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Add key
+                          </button>
+                        )
+                      )}
+                    </div>
+                    {open && !stored && (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                          autoFocus
+                          value={keyDraft}
+                          onChange={(e) => setKeyDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveKey(tool.id, tool.name);
+                            if (e.key === "Escape") {
+                              setKeyOpen(null);
+                              setKeyDraft("");
+                            }
+                          }}
+                          placeholder={tool.envFallback}
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            height: 28,
+                            padding: "0 10px",
+                            borderRadius: 8,
+                            background: "var(--surface-panel)",
+                            border: "1px solid var(--border-default)",
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 12,
+                            color: "var(--text-primary)",
+                            outline: "none",
+                          }}
+                        />
+                        <button
+                          onClick={() => saveKey(tool.id, tool.name)}
+                          style={{
+                            height: 28,
+                            padding: "0 12px",
+                            borderRadius: 8,
+                            border: "none",
+                            background: "var(--accent)",
+                            color: "#fff",
+                            fontFamily: "var(--font-ui)",
+                            fontSize: 11.5,
+                            fontWeight: 500,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => {
+                            setKeyOpen(null);
+                            setKeyDraft("");
+                          }}
+                          aria-label="Cancel"
+                          style={{
+                            height: 28,
+                            width: 28,
+                            borderRadius: 8,
+                            border: "1px solid var(--border-default)",
+                            background: "var(--surface-raised)",
+                            fontFamily: "var(--font-ui)",
+                            fontSize: 12,
+                            color: "var(--text-secondary)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

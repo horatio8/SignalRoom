@@ -104,6 +104,29 @@ exhausts (the S6 source-health card shows "GNews armed").
    transcribes with Whisper (OpenAI API `OPENAI_API_KEY` at ~$0.006/min, or
    self-hosted), and inserts transcripts as `platform='podcast'` mentions.
 
+## Per-client credentials (bring your own keys)
+
+By default every campaign runs on the platform's own ingest keys (the env vars
+above). Clients who prefer to use their own accounts — their own Apify org,
+their own NewsData quota, their own Meta Ad Library token — can supply
+per-campaign credentials instead.
+
+- **Services that support BYOK** (the SURVEYING/MONITORING tools):
+  `kwatch`, `newsdata`, `gnews`, `apify`, `meta_ad_library`, `firecrawl`,
+  `podcastindex`. Delivery/publish tools (Zernio, Resend, Cellcast) stay
+  **platform-level** for now — they are our sending identity, not the client's.
+- **How resolution works:** the campaign's active row in `campaign_integrations`
+  wins; when there is none the adapter falls back to the platform env var. This
+  is `resolveCredentials(campaignId, service)` in `src/lib/integrations.ts`
+  (server-only — never import it from a client component).
+- **Where operators enter them:** S6 Settings → **Client integrations** card.
+  Owner/operator only; `client_viewer` never sees this card or the rows.
+- **Storage / encryption:** credentials land in `campaign_integrations.credentials`
+  (jsonb). In production store the secret bytes in **Supabase Vault / pgsodium**
+  and keep only a vault reference in the row — the migration comments mark this
+  as the integration point. RLS on the table is stricter than the others: both
+  read and write are restricted to owner/operator.
+
 ## 4. Delivery channels
 
 ### Resend — briefing + alert email
