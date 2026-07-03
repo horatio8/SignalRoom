@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useApp, campaignResetPatch, type CampaignId, type Role } from "@/lib/state";
 import { dataFor, CAMPAIGNS } from "@/lib/data";
 import { displayType } from "@/lib/ui";
+import { useAuth } from "@/lib/auth/AuthProvider";
 
 /** Screens a client_viewer may see (role gating per handoff §App shell). */
 const CLIENT_ALLOWED = ["overview", "narrative", "feed", "stories", "briefings"];
@@ -39,11 +40,22 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const { state, set } = useApp();
+  const { mode, user, signOut } = useAuth();
   const router = useRouter();
   const { role, dark } = state;
   const D = dataFor(campaign);
   const canManage = role !== "client";
   const isClient = role === "client";
+
+  // A real authenticated user (supabase mode) replaces the demo role switcher.
+  const realUser = mode === "supabase" && user ? user : null;
+
+  // Reflect the authenticated user's role into the app store so the sidebar nav
+  // gating (which reads state.role) matches who is actually signed in.
+  useEffect(() => {
+    if (user && user.role !== role) set({ role: user.role });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   // Keep "current campaign" in state for the campaign-less routes (/admin, /onboarding).
   useEffect(() => {
@@ -90,6 +102,20 @@ export function AppShell({
   };
 
   const roleLabel = role === "client" ? "Client viewer" : role[0].toUpperCase() + role.slice(1);
+
+  // User block: real user name/email when authenticated, else the demo default.
+  const displayName = realUser ? realUser.name || realUser.email || "Signed in" : "Tom Keller";
+  const initials = (() => {
+    const source = realUser ? realUser.name || realUser.email || "" : "Tom Keller";
+    const parts = source.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
+    const raw = parts.length >= 2 ? parts[0][0] + parts[1][0] : source.slice(0, 2);
+    return raw.toUpperCase() || "SR";
+  })();
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/login");
+  };
 
   return (
     <div
@@ -157,37 +183,39 @@ export function AppShell({
           ingest live · 42/hr
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-          <div
-            style={{
-              display: "flex",
-              background: "var(--surface-raised)",
-              border: "1px solid var(--border-default)",
-              borderRadius: 8,
-              padding: 2,
-              gap: 2,
-            }}
-          >
-            {(["owner", "operator", "client"] as Role[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRole(r)}
-                style={{
-                  height: 24,
-                  padding: "0 10px",
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  fontFamily: "var(--font-ui)",
-                  fontSize: 11.5,
-                  fontWeight: role === r ? 600 : 500,
-                  background: role === r ? "var(--surface-panel)" : "transparent",
-                  color: role === r ? "var(--text-primary)" : "var(--text-tertiary)",
-                }}
-              >
-                {r === "client" ? "Client" : r[0].toUpperCase() + r.slice(1)}
-              </button>
-            ))}
-          </div>
+          {!realUser && (
+            <div
+              style={{
+                display: "flex",
+                background: "var(--surface-raised)",
+                border: "1px solid var(--border-default)",
+                borderRadius: 8,
+                padding: 2,
+                gap: 2,
+              }}
+            >
+              {(["owner", "operator", "client"] as Role[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRole(r)}
+                  style={{
+                    height: 24,
+                    padding: "0 10px",
+                    borderRadius: 6,
+                    border: "none",
+                    cursor: "pointer",
+                    fontFamily: "var(--font-ui)",
+                    fontSize: 11.5,
+                    fontWeight: role === r ? 600 : 500,
+                    background: role === r ? "var(--surface-panel)" : "transparent",
+                    color: role === r ? "var(--text-primary)" : "var(--text-tertiary)",
+                  }}
+                >
+                  {r === "client" ? "Client" : r[0].toUpperCase() + r.slice(1)}
+                </button>
+              ))}
+            </div>
+          )}
           <button
             onClick={() => set((s) => ({ dark: !s.dark }))}
             title="Toggle dark ops mode"
@@ -223,7 +251,7 @@ export function AppShell({
               color: "var(--accent-text)",
             }}
           >
-            TK
+            {initials}
           </div>
         </div>
       </div>
@@ -308,10 +336,7 @@ export function AppShell({
             </button>
           )}
           <button
-            onClick={() => {
-              set({ loginState: "idle" });
-              router.push("/login");
-            }}
+            onClick={handleSignOut}
             style={{
               display: "flex",
               alignItems: "center",
@@ -327,8 +352,19 @@ export function AppShell({
               fontFamily: "var(--font-ui)",
             }}
           >
-            <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>Tom Keller</span>
+            <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {displayName}
+              </span>
               <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{roleLabel} · sign out</span>
             </span>
           </button>
