@@ -15,6 +15,9 @@ npm run dev        # http://localhost:3000 → redirects to /voss/overview
 
 `npm run build && npm start` for a production build.
 
+**Demo walkthrough:** `docs/DEMO.md` is a click-by-click script covering every
+functionality (~10 min) — use it to test the build or demonstrate to clients.
+
 ## What's here
 
 | Route | Screen |
