@@ -16,7 +16,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { resolveCredentials } from "@/lib/integrations";
+import { resolveCredentials } from "@/lib/integrations.server";
 import { searchPlatform, ScrapeCreatorsError } from "./scrapecreators";
 import type {
   CampaignSummary,

@@ -5,13 +5,10 @@
  * docs/INTEGRATIONS.md §Per-client credentials and the `campaign_integrations`
  * table (supabase/migrations/0003_campaign_integrations.sql).
  *
- * SERVER-ONLY: resolveCredentials() reads secrets (platform env + the
- * credentials store) and MUST NOT be imported from client components — doing so
- * would ship keys into the client bundle. The SURVEY_TOOLS catalog below is the
- * only client-safe export (it carries display metadata + env-var *names*, no
- * values). Keep the resolver on the server (route handlers, workers, server
- * actions). If your toolchain supports it, add `import "server-only";` at the
- * top to fail the build on accidental client import.
+ * CLIENT-SAFE: this module carries display metadata + env-var *names* only, no
+ * values — client components may import SURVEY_TOOLS freely. The secret-reading
+ * resolver (resolveCredentials) lives in src/lib/integrations.server.ts behind
+ * a `server-only` import guard so accidental client import fails the build.
  */
 
 export type IntegrationService =
@@ -43,51 +40,5 @@ export const SURVEY_TOOLS: SurveyTool[] = [
   { id: "podcastindex", name: "PodcastIndex", desc: "podcast monitoring (F4)", envFallback: "PODCASTINDEX_API_KEY" },
 ];
 
-/** Where a set of resolved credentials came from. */
-export interface ResolvedCredentials {
-  source: "campaign" | "platform";
-  credentials: Record<string, string> | null;
-}
-
-/**
- * Resolve the credentials an adapter should use for `service` on `campaignId`.
- *
- * Resolution rule: the campaign's active `campaign_integrations` row wins; when
- * there is none, fall back to the platform env var named in SURVEY_TOOLS. If
- * neither exists, `credentials` is null (source stays "platform") — the caller
- * decides whether that service is skippable or a hard error.
- *
- * The per-campaign lookup reads `campaign_integrations` with the service-role
- * client (bypasses RLS; keep it server-only). When Supabase isn't configured
- * (local demo) it falls straight through to the platform env fallback. If
- * secrets move to Supabase Vault, resolve `secret_ref` through
- * `vault.decrypted_secrets` instead of reading the plain jsonb column.
- */
-export async function resolveCredentials(
-  campaignId: string,
-  service: IntegrationService
-): Promise<ResolvedCredentials> {
-  // ---- Per-campaign BYOK lookup (campaign key wins) ----
-  const admin = (await import("@/lib/supabase/admin")).supabaseAdmin();
-  if (admin) {
-    const { data } = await admin
-      .from("campaign_integrations")
-      .select("credentials")
-      .eq("campaign_id", campaignId)
-      .eq("service", service)
-      .eq("is_active", true)
-      .maybeSingle();
-    if (data?.credentials) {
-      return { source: "campaign", credentials: data.credentials };
-    }
-  }
-
-  // ---- Platform env fallback (implemented) ----
-  const tool = SURVEY_TOOLS.find((t) => t.id === service);
-  const value = tool ? process.env[tool.envFallback] : undefined;
-
-  return {
-    source: "platform",
-    credentials: value ? { api_key: value } : null,
-  };
-}
+// Credential resolution lives in src/lib/integrations.server.ts
+// (resolveCredentials) — it reads secrets and is server-only by import guard.
