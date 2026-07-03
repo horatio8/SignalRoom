@@ -24,3 +24,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase agent skills — dev-tool assets, not app runtime
+.agents/
+skills-lock.json

@@ -10,6 +10,7 @@ import React from "react";
 import { useParams } from "next/navigation";
 import { useApp, type CampaignId } from "@/lib/state";
 import { dataFor } from "@/lib/data";
+import { useLiveMentions } from "@/lib/data/live";
 import { PlatformChip } from "@/components/app/PlatformChip";
 import { chipTone, displayType, monoMeta, overline, sentTone, signed } from "@/lib/ui";
 import { cardSurface } from "@/lib/ui";
@@ -21,7 +22,14 @@ export default function FeedPage() {
   const canManage = state.role !== "client";
   const { feedTab, seg, hiddenIds } = state;
 
-  const rows = [...state.addedMentions, ...D.mentions].filter(
+  // Live rows (RLS-scoped) replace fixtures when present; otherwise fall back.
+  const liveData = useLiveMentions(campaign);
+  const baseMentions = liveData.live ? liveData.mentions : D.mentions;
+
+  // Media-type + segment chips are unchanged: "all" (the default + campaign
+  // reset) shows every row, so live rows whose topic-derived segs don't match a
+  // fixture chip still render; picking a specific chip filters as designed.
+  const rows = [...state.addedMentions, ...baseMentions].filter(
     (m) => (feedTab === "all" || m.media === feedTab) && (seg === "all" || m.segs.includes(seg))
   );
 
@@ -60,6 +68,12 @@ export default function FeedPage() {
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Mention feed</span>
         <span style={monoMeta}>relevance ≥ 30 gate on · 96 low-relevance items hidden today</span>
+        {liveData.live && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={overline}>live</span>
+            <span style={monoMeta}>{liveData.mentions.length} mentions</span>
+          </span>
+        )}
         {canManage && (
           <button
             onClick={() => set((s) => ({ addOpen: !s.addOpen }))}

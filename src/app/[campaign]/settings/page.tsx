@@ -9,7 +9,8 @@
 import React from "react";
 import { useParams } from "next/navigation";
 import { useApp, type CampaignId } from "@/lib/state";
-import { dataFor, sourceHealth } from "@/lib/data";
+import { dataFor, sourceHealth, type KeywordKind } from "@/lib/data";
+import { useKeywordManager, type LiveKeyword } from "@/lib/data/keywords";
 import { Switch } from "@/components/ds";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
 import { SURVEY_TOOLS } from "@/lib/integrations";
@@ -18,6 +19,12 @@ export default function SettingsPage() {
   const { campaign } = useParams<{ campaign: CampaignId }>();
   const { state, set, notify } = useApp();
   const D = dataFor(campaign);
+
+  // Second live surface: when Supabase is live and a session exists, the
+  // keywords card manages real `keywords` rows; otherwise it stays in demo mode
+  // (fixtures + customKeywords + "Push to sources"), exactly as before.
+  const km = useKeywordManager(campaign);
+  const [kwKind, setKwKind] = React.useState<KeywordKind>("issue");
 
   // Which integration's inline key input is open (only one at a time) + its
   // draft text. The saved keys live in the app context (state.byoKeys); this is
@@ -74,6 +81,30 @@ export default function SettingsPage() {
     setTimeout(() => set({ pushed: false }), 2500);
   };
 
+  // Live-mode keyword mutations. Each surfaces the manager's error string via a
+  // toast (RLS denials land here for client_viewers), or a short confirmation on
+  // success. The list refresh is owned by the manager.
+  const addKwLive = async () => {
+    const term = state.kwInput.trim();
+    if (!term) return;
+    const err = await km.add(term, kwKind);
+    if (err) return notify(err);
+    notify("Keyword added — applies at the next ingest sweep");
+    set({ kwInput: "" });
+  };
+
+  const toggleKwLive = async (row: LiveKeyword) => {
+    const err = await km.toggle(row.id, !row.is_active);
+    if (err) return notify(err);
+    notify(row.is_active ? "Keyword paused" : "Keyword resumed");
+  };
+
+  const removeKwLive = async (id: string) => {
+    const err = await km.remove(id);
+    if (err) return notify(err);
+    notify("Keyword removed");
+  };
+
   const addRecipient = () => {
     const email = state.rcInput.trim();
     if (!email) return;
@@ -117,25 +148,37 @@ export default function SettingsPage() {
               }}
             >
               <span style={{ fontSize: 16, fontWeight: 600 }}>Keywords</span>
-              <span style={monoMeta}>12 active · incl. Español group</span>
-              <button
-                onClick={pushKeywords}
-                style={{
-                  marginLeft: "auto",
-                  height: 28,
-                  padding: "0 12px",
-                  borderRadius: 8,
-                  border: "none",
-                  background: "var(--accent)",
-                  color: "#fff",
-                  fontFamily: "var(--font-ui)",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
-              >
-                {state.pushed ? "✓ Pushed to KWatch + Apify" : "Push to sources"}
-              </button>
+              <span style={monoMeta}>
+                {km.live
+                  ? `${km.rows.filter((r) => r.is_active).length} active`
+                  : "12 active · incl. Español group"}
+              </span>
+              {km.live ? (
+                // Polling makes the push obsolete: sources read active keywords
+                // every sweep, so there is nothing to push.
+                <span style={{ ...monoMeta, marginLeft: "auto" }}>
+                  sources poll active keywords · changes apply at the next hourly sweep
+                </span>
+              ) : (
+                <button
+                  onClick={pushKeywords}
+                  style={{
+                    marginLeft: "auto",
+                    height: 28,
+                    padding: "0 12px",
+                    borderRadius: 8,
+                    border: "none",
+                    background: "var(--accent)",
+                    color: "#fff",
+                    fontFamily: "var(--font-ui)",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    cursor: "pointer",
+                  }}
+                >
+                  {state.pushed ? "✓ Pushed to KWatch + Apify" : "Push to sources"}
+                </button>
+              )}
             </div>
             <div
               style={{
@@ -150,7 +193,7 @@ export default function SettingsPage() {
                 value={state.kwInput}
                 onChange={(e) => set({ kwInput: e.target.value })}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") addKw();
+                  if (e.key === "Enter") km.live ? void addKwLive() : addKw();
                 }}
                 placeholder='new term — boolean ok: "voss" AND (water OR CAP)'
                 style={{
@@ -167,8 +210,20 @@ export default function SettingsPage() {
                   outline: "none",
                 }}
               />
+              {km.live && (
+                <select
+                  value={kwKind}
+                  onChange={(e) => setKwKind(e.target.value as KeywordKind)}
+                  style={{ ...selectStyle, height: 30, flex: "none" }}
+                >
+                  <option value="candidate">candidate</option>
+                  <option value="opponent">opponent</option>
+                  <option value="issue">issue</option>
+                  <option value="misspelling">misspelling</option>
+                </select>
+              )}
               <button
-                onClick={addKw}
+                onClick={() => (km.live ? void addKwLive() : addKw())}
                 style={{
                   height: 30,
                   padding: "0 12px",
@@ -185,7 +240,71 @@ export default function SettingsPage() {
                 Add keyword
               </button>
             </div>
-            {keywords.map((k) => {
+            {km.live
+              ? km.rows.map((row) => {
+                  const kt = kindTone(row.kind);
+                  return (
+                    <div
+                      key={row.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "10px 16px",
+                        borderBottom: "1px solid var(--border-subtle)",
+                        // Paused keywords dim like other inactive rows.
+                        opacity: row.is_active ? 1 : 0.45,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 12.5,
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.term}
+                      </span>
+                      <span
+                        style={{
+                          flex: "none",
+                          fontSize: 11,
+                          fontWeight: 500,
+                          padding: "2px 8px",
+                          borderRadius: 6,
+                          background: kt.kindBg,
+                          color: kt.kindFg,
+                        }}
+                      >
+                        {row.kind}
+                      </span>
+                      {/* Match counts arrive later from mentions aggregates; "—" until then. */}
+                      <span style={{ ...monoMeta, flex: "none" }}>—</span>
+                      <Switch checked={row.is_active} onChange={() => void toggleKwLive(row)} />
+                      <button
+                        onClick={() => void removeKwLive(row.id)}
+                        style={{
+                          flex: "none",
+                          border: "none",
+                          background: "none",
+                          padding: 0,
+                          fontFamily: "var(--font-ui)",
+                          fontSize: 11,
+                          color: "var(--text-tertiary)",
+                          textDecoration: "underline",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  );
+                })
+              : keywords.map((k) => {
               const off = state.kwOff.includes(k.id);
               const kt = kindTone(k.kind);
               return (

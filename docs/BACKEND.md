@@ -86,9 +86,26 @@ and all interactive state through `src/lib/state.tsx`. To go live:
 - **Login** — Supabase Auth magic link (§8); roles travel with invites;
   briefing/alert recipients need no account (M3).
 
+## Backend live read path (Feed)
+
+The **S2 Feed** already reads live data. `src/lib/data/live.ts`
+(`useLiveMentions`) queries `mentions` through the anon-key browser client —
+RLS-scoped to campaign members — and maps rows to the exact `Mention` view
+model. It fires when `mentions` rows exist for the campaign, switching the feed
+off fixtures automatically (the "live · N mentions" indicator); signed out, in
+demo mode, or on any error it returns zero rows and the feed falls back to
+`dataFor()`. Every other screen still renders fixtures for now, so live data is
+strictly additive.
+
 ## Out of scope for the UI build (external services)
 
-Ingest adapters (KWatch, NewsData/GNews, Apify, Bluesky Jetstream, RSS,
-PodcastIndex+Whisper), the enrichment/clustering/spike-detector workers,
+Ingest and enrichment are now **built for the ScrapeCreators path**: the ingest
+runner (`src/lib/ingest/`, ScrapeCreators keyword search, driven by the
+`/api/cron/ingest` hourly cron) and the enrichment/clustering worker
+(`src/lib/enrich/`, `/api/cron/enrich` every 15 min) write and score real
+`mentions`. See docs/INTEGRATIONS.md §3 for the setup runbook.
+
+Still external / not yet built: the other ingest adapters (KWatch, NewsData/
+GNews, Apify, Bluesky Jetstream, RSS, PodcastIndex+Whisper), the spike detector,
 Resend/Cellcast delivery, Zernio publishing, and Stripe billing are backend
 services per spec §2–§7 — the schema above is ready for them.
