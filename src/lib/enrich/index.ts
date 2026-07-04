@@ -21,6 +21,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { asCampaignType } from "@/lib/campaignType";
 import {
   ENRICH_TOOL,
   MODEL_BATCH,
@@ -61,6 +62,8 @@ interface CampaignRow {
   name: string;
   country: string;
   message_platform: unknown;
+  // Optional so the pre-0005 fallback select (which omits it) still type-checks.
+  campaign_type?: string | null;
 }
 
 interface KeywordRow {
@@ -203,11 +206,25 @@ async function loadCampaignContext(
   context: EnrichContext;
   liveClusters: LiveCluster[];
 } | null> {
-  const { data: campaign } = await admin
+  // Prefer campaign_type (migration 0005). On a missing-column error retry
+  // without it and default to 'candidate' (migration-transition fallback), so
+  // enrichment keeps working before 0005 is applied.
+  let campaign: CampaignRow | null = null;
+  const withType = await admin
     .from("campaigns")
-    .select("id, slug, name, country, message_platform")
+    .select("id, slug, name, country, message_platform, campaign_type")
     .eq("id", campaignId)
     .maybeSingle<CampaignRow>();
+  if (withType.error) {
+    const noType = await admin
+      .from("campaigns")
+      .select("id, slug, name, country, message_platform")
+      .eq("id", campaignId)
+      .maybeSingle<CampaignRow>();
+    campaign = noType.data ?? null;
+  } else {
+    campaign = withType.data ?? null;
+  }
   if (!campaign) return null;
 
   const { data: keywordRows } = await admin
@@ -246,6 +263,7 @@ async function loadCampaignContext(
   const context: EnrichContext = {
     campaignName: campaign.name,
     country: campaign.country,
+    campaignType: asCampaignType(campaign.campaign_type),
     keywords,
     pillars: extractPillars(campaign.message_platform),
     openClusters: liveClusters.map((c) => ({

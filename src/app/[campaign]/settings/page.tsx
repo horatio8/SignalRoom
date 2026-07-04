@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import { useApp, type CampaignId } from "@/lib/state";
 import { dataFor, sourceHealth, type KeywordKind } from "@/lib/data";
 import { useKeywordManager, type LiveKeyword } from "@/lib/data/keywords";
+import { kindLabel } from "@/lib/campaignType";
 import { Switch } from "@/components/ds";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
 import { SURVEY_TOOLS } from "@/lib/integrations";
@@ -216,10 +217,12 @@ export default function SettingsPage() {
                   onChange={(e) => setKwKind(e.target.value as KeywordKind)}
                   style={{ ...selectStyle, height: 30, flex: "none" }}
                 >
-                  <option value="candidate">candidate</option>
-                  <option value="opponent">opponent</option>
-                  <option value="issue">issue</option>
-                  <option value="misspelling">misspelling</option>
+                  {/* Values stay the DB enums; labels adapt to the campaign type
+                      (issue campaigns relabel candidate→campaign, opponent→opposition). */}
+                  <option value="candidate">{kindLabel("candidate", km.campaignType)}</option>
+                  <option value="opponent">{kindLabel("opponent", km.campaignType)}</option>
+                  <option value="issue">{kindLabel("issue", km.campaignType)}</option>
+                  <option value="misspelling">{kindLabel("misspelling", km.campaignType)}</option>
                 </select>
               )}
               <button
@@ -280,7 +283,7 @@ export default function SettingsPage() {
                           color: kt.kindFg,
                         }}
                       >
-                        {row.kind}
+                        {kindLabel(row.kind, km.campaignType)}
                       </span>
                       {/* Match counts arrive later from mentions aggregates; "—" until then. */}
                       <span style={{ ...monoMeta, flex: "none" }}>—</span>
