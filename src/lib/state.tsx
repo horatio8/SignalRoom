@@ -32,6 +32,7 @@ export interface AddedMention {
   meta: string;
   time: string;
   sentV: number;
+  url?: string | null;
 }
 
 export interface GridRow {

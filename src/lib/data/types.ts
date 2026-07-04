@@ -67,6 +67,9 @@ export interface Mention {
   meta: string;
   time: string;
   sentV: number;
+  // Permalink to the original post/article, when the source exposes one.
+  // Fixtures omit it; live rows carry it so the feed can link out.
+  url?: string | null;
 }
 
 export interface FeedTab {

@@ -54,6 +54,7 @@ export default function FeedPage() {
           meta: "manual add · pending enrichment",
           time: "just now",
           sentV: 0,
+          url: url.startsWith("http") ? url : "https://" + url,
         },
         ...s.addedMentions,
       ],
@@ -223,14 +224,49 @@ export default function FeedPage() {
               <PlatformChip pf={m.pf} style={{ marginTop: 1 }} />
               <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {m.title}
-                  </span>
+                  {m.url ? (
+                    <a
+                      href={m.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={m.url}
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: "inherit",
+                        textDecoration: "none",
+                      }}
+                    >
+                      {m.title}
+                    </a>
+                  ) : (
+                    <span style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m.title}
+                    </span>
+                  )}
                   <span style={{ ...monoMeta, flex: "none", marginLeft: "auto" }}>{m.time}</span>
                 </div>
                 <span style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.45 }}>{m.body}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={monoMeta}>{m.meta}</span>
+                  {m.url && (
+                    <a
+                      href={m.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 11,
+                        color: "var(--accent-text)",
+                        textDecoration: "none",
+                      }}
+                    >
+                      source ↗
+                    </a>
+                  )}
                   <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
                     <span
                       style={{

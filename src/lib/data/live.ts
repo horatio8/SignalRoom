@@ -112,6 +112,8 @@ function toMention(row: LiveRow): Mention {
     time: relTime(row.published_at),
     // Unenriched rows (relevance/sentiment null) render as neutral 0.
     sentV: row.sentiment ?? 0,
+    // Permalink to the source post/article when the platform exposes one.
+    url: row.url,
   };
 }
 

@@ -367,10 +367,12 @@ and the runbook's ground rules (no sock puppets, one strike, vary + stagger).
 2. Add every env var from `.env.example` in Project → Settings → Environment
    Variables (service keys as **server** env only).
 3. Crons registered in `vercel.json` today: **ingest** (`/api/cron/ingest`,
-   hourly `0 * * * *`) and **enrichment** (`/api/cron/enrich`, every 15 min
-   `*/15 * * * *`). Both require `Authorization: Bearer $CRON_SECRET`. Planned
-   additions as those workers land: spike detector, news/RSS polls, briefing
-   generator (hourly), opponent-ads pull (daily), cluster label/close (nightly).
+   hourly `0 * * * *`), **enrichment** (`/api/cron/enrich`, every 15 min
+   `*/15 * * * *`) and **Airtable mirror** (`/api/cron/sync-airtable`,
+   `7,22,37,52 * * * *` — offset from enrich so enrichment tends to land first).
+   All require `Authorization: Bearer $CRON_SECRET`. Planned additions as those
+   workers land: spike detector, news/RSS polls, briefing generator (hourly),
+   opponent-ads pull (daily), cluster label/close (nightly).
 
 ## 8. Stripe (Phase 3 billing)
 
@@ -387,6 +389,46 @@ and the runbook's ground rules (no sock puppets, one strike, vary + stagger).
 - The `/admin` screen expects: ingest counts per source/hour, queue depth
   (`enriched_at is null`), duplicate rate, LLM spend, delivery failures —
   emit these as rows/counters as you build each worker (§9).
+
+## Airtable audit mirror
+
+Mirrors **every** mention recorded in Supabase into an Airtable table so the
+operator has a full, auditable record of what was captured — across all
+platforms and sources, not just organic reach. It's read-only from Airtable's
+point of view: SignalRoom writes rows, and `airtable_synced_at` on `mentions`
+makes the sync idempotent (each mention is written exactly once and re-runs
+skip already-mirrored rows).
+
+Setup:
+
+1. Apply migration `0006_airtable_sync.sql` first (adds
+   `mentions.airtable_synced_at` + its partial index).
+2. Create a **personal access token** at
+   [airtable.com/create/tokens](https://airtable.com/create/tokens) with scope
+   `data.records:write` on the SignalRoom base, and set it as `AIRTABLE_TOKEN`
+   in Vercel (and `.env.local`). This token is what enables the mirror — with it
+   absent the sync is a clean no-op and `/api/cron/sync-airtable` returns 503.
+3. Base and table default to the provided ids (`AIRTABLE_BASE_ID` =
+   `appldd3J5iWvlu2dV`, `AIRTABLE_TABLE_ID` = `tbls41mIlyJCyjn2Y`); override
+   either via env if you point at a different base/table. The table's fields
+   already exist and are written by name with `typecast:true` — you do not need
+   to create fields. `AIRTABLE_MAX_RECORDS` (default 200) bounds one run.
+
+When it runs:
+
+- Cron `/api/cron/sync-airtable` on `7,22,37,52 * * * *` (offset from enrich's
+  `*/15` so enrichment tends to land first). Requires
+  `Authorization: Bearer $CRON_SECRET`.
+- Manually: `curl -H "Authorization: Bearer $CRON_SECRET"
+  https://<deployment>/api/cron/sync-airtable`.
+
+Sync rule: a mention is mirrored once it reaches a **terminal enrichment state**
+(`enriched_at` set OR `enrich_failed = true`) — so sentiment/relevance land with
+it — **or** after a **2h safety window** from capture if enrichment is stuck, so
+nothing is ever lost. Airtable caps writes at 10 records/request and 5 req/sec
+per base, so the worker chunks by 10 and pauses ~220ms between requests; only
+successfully written chunks get stamped, so a failed chunk simply retries next
+run.
 
 ---
 
@@ -411,7 +453,7 @@ and the runbook's ground rules (no sock puppets, one strike, vary + stagger).
 | `ZERNIO_API_TOKEN` | publishing | Phase 4 |
 | `META_AD_LIBRARY_TOKEN` | opponent ads (F1) | daily cron |
 | `FIRECRAWL_API_KEY` | S11 discovery | job |
-| `AIRTABLE_TOKEN`, `AIRTABLE_BASE_ID` | S11 sync (optional) | job |
+| `AIRTABLE_TOKEN`, `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE_ID`, `AIRTABLE_MAX_RECORDS` | Airtable audit mirror | cron (`/api/cron/sync-airtable`) |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | billing | Phase 3 |
 | `SENTRY_DSN` | observability | optional |
 
