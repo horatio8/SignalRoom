@@ -10,6 +10,7 @@ import React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp, type CampaignId } from "@/lib/state";
 import { dataFor } from "@/lib/data";
+import { useLiveOverview } from "@/lib/data/liveAnalytics";
 import { KpiCard } from "@/components/ds";
 import { VolumeChart } from "@/components/app/VolumeChart";
 import { cardSurface, displayType, heatTone, monoMeta, overline, sentTone, signed } from "@/lib/ui";
@@ -20,6 +21,17 @@ export default function OverviewPage() {
   const { state, set } = useApp();
   const D = dataFor(campaign);
   const goStories = () => router.push(`/${campaign}/stories`);
+
+  // Live aggregates (RLS-scoped) replace the fixture slices they can honestly
+  // fill; SOV + urgent-alert KPIs, the 30d volume chart, the split note and the
+  // ask-the-monitor chat cannot be sourced from mentions alone and stay fixture.
+  const ov = useLiveOverview(campaign);
+  const kpis = ov.live ? [ov.volumeKpi, ov.sentimentKpi, D.kpis[2], D.kpis[3]] : D.kpis;
+  const mediaCount = ov.live ? ov.mediaCount : D.mediaCount;
+  const socialCount = ov.live ? ov.socialCount : D.socialCount;
+  const mediaPct = ov.live ? ov.mediaPct : D.mediaPct;
+  const hours = ov.live ? ov.hours : D.hours;
+  const stories = ov.live && ov.stories.length ? ov.stories : D.stories;
 
   const cannedAsk = (q: string) =>
     `On "${q}" — ${D.name} is at ${D.kpis[0].value} mentions/24h (${D.kpis[0].delta}), net sentiment ${D.kpis[1].value}. The hottest cluster is “${D.stories[0].label}” at ${D.stories[0].vel} baseline (${signed(D.stories[0].sentV)}). Full drill-down is on Stories.`;
@@ -35,11 +47,17 @@ export default function OverviewPage() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Overview</span>
         <span style={monoMeta}>Wed 2 Jul · 07:58 · updated 2 min ago</span>
+        {ov.live && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={overline}>live</span>
+            <span style={monoMeta}>{ov.mentionCount} mentions</span>
+          </span>
+        )}
       </div>
 
       {/* KPI row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
-        {D.kpis.map((k) => (
+        {kpis.map((k) => (
           <KpiCard key={k.label} label={k.label} value={k.value} delta={k.delta} deltaColor={k.tone} heat={k.heat} />
         ))}
       </div>
@@ -68,11 +86,11 @@ export default function OverviewPage() {
           <span style={{ fontSize: 16, fontWeight: 600 }}>Media vs social</span>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", ...monoMeta }}>
-              <span>media {D.mediaCount}</span>
-              <span>social {D.socialCount}</span>
+              <span>media {mediaCount}</span>
+              <span>social {socialCount}</span>
             </div>
             <div style={{ display: "flex", height: 10, borderRadius: 999, overflow: "hidden", gap: 2 }}>
-              <span style={{ width: `${D.mediaPct}%`, background: "var(--chart-media)" }} />
+              <span style={{ width: `${mediaPct}%`, background: "var(--chart-media)" }} />
               <span style={{ flex: 1, background: "var(--chart-social)" }} />
             </div>
             <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>{D.splitNote}</span>
@@ -91,7 +109,7 @@ export default function OverviewPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
             <span style={overline}>Hour-by-hour heat · 24h</span>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(24,1fr)", gap: 2 }}>
-              {D.hours.map((h, i) => (
+              {hours.map((h, i) => (
                 <span
                   key={i}
                   title={`${String(i).padStart(2, "0")}:00`}
@@ -129,7 +147,7 @@ export default function OverviewPage() {
               View all →
             </button>
           </div>
-          {D.stories.map((s) => {
+          {stories.map((s) => {
             const hh = heatTone(s.h);
             const ss = sentTone(s.sentV);
             return (

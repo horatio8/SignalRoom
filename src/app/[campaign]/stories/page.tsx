@@ -10,6 +10,7 @@ import React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp, type CampaignId } from "@/lib/state";
 import { dataFor } from "@/lib/data";
+import { useLiveStories } from "@/lib/data/liveAnalytics";
 import { Sparkline } from "@/components/ds";
 import { PlatformChip } from "@/components/app/PlatformChip";
 import { cardSurface, displayType, heatTone, monoMeta, overline, sentTone, signed } from "@/lib/ui";
@@ -21,7 +22,14 @@ export default function StoriesPage() {
   const D = dataFor(campaign);
   const canManage = state.role !== "client";
   const { storyTab } = state;
-  const fc = D.fc;
+
+  // Live clusters (RLS-scoped) drive the Clusters tab — featured card + list —
+  // when present; the Opposition ads and Press corps tabs stay fixture (F1/F2
+  // tables, not clusters). D.fc is the fallback for the two fields clusters
+  // cannot supply (velocity sparkline + null origin path).
+  const live = useLiveStories(campaign, D.fc);
+  const fc = live.live ? live.fc : D.fc;
+  const otherClusters = live.live ? live.otherClusters : D.otherClusters;
   const fss = sentTone(fc.sentV);
 
   const tabs = [
@@ -35,6 +43,14 @@ export default function StoriesPage() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Stories</span>
         <span style={monoMeta}>5 open clusters · 2 fading</span>
+        {live.live && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={overline}>live</span>
+            <span style={monoMeta}>
+              {live.openCount} open · {live.fadingCount} fading
+            </span>
+          </span>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border-subtle)" }}>
@@ -228,7 +244,7 @@ export default function StoriesPage() {
 
           {/* Remaining clusters */}
           <div style={{ ...cardSurface, overflow: "hidden" }}>
-            {D.otherClusters.map((c) => {
+            {otherClusters.map((c) => {
               const hh = heatTone(c.h);
               const ss = sentTone(c.sentV);
               const open = c.status === "open";
