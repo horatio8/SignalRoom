@@ -9,7 +9,8 @@
 import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useApp, campaignResetPatch, type CampaignId, type Role } from "@/lib/state";
-import { dataFor, CAMPAIGNS } from "@/lib/data";
+import { dataFor, CAMPAIGNS, isCampaignId } from "@/lib/data";
+import { useLiveCampaigns } from "@/lib/data/liveCampaigns";
 import { displayType } from "@/lib/ui";
 import { useAuth } from "@/lib/auth/AuthProvider";
 
@@ -23,7 +24,9 @@ interface NavItem {
   roles?: Role[];
 }
 
-export function screenHref(campaign: CampaignId, screen: string): string {
+// `campaign` is a slug: a fixture id ("voss" | "marsh") or a live DB campaign
+// slug. It only ever gets template-interpolated into a path, so accept string.
+export function screenHref(campaign: string, screen: string): string {
   if (screen === "admin") return "/admin";
   if (screen === "onboarding") return "/onboarding";
   if (screen === "login") return "/login";
@@ -36,14 +39,23 @@ export function AppShell({
   children,
 }: {
   screen: string;
-  campaign: CampaignId;
+  // A fixture id or a live campaign slug — unknown slugs render fixture data
+  // (dataFor falls back to voss); the Feed + Settings keywords are the live
+  // surfaces. Kept as string so the layout can pass live slugs through.
+  campaign: string;
   children: React.ReactNode;
 }) {
   const { state, set, notify } = useApp();
   const { mode, user, signOut, passkeysEnabled, registerPasskey } = useAuth();
   const router = useRouter();
   const { role, dark } = state;
-  const D = dataFor(campaign);
+  // Unknown (live) slugs fall back to voss fixtures inside dataFor — acceptable
+  // and pre-existing; only the Feed + Settings keywords read live rows.
+  const D = dataFor(campaign as CampaignId);
+  // Live campaigns the user can see, merged into the switcher below (fixtures
+  // first, then DB campaigns that don't shadow voss/marsh). Empty in demo mode.
+  const { campaigns: liveCampaigns } = useLiveCampaigns();
+  const extraCampaigns = liveCampaigns.filter((c) => !isCampaignId(c.slug));
   const canManage = role !== "client";
   const isClient = role === "client";
 
@@ -59,7 +71,9 @@ export function AppShell({
 
   // Keep "current campaign" in state for the campaign-less routes (/admin, /onboarding).
   useEffect(() => {
-    if (state.campaign !== campaign) set({ campaign });
+    // state.campaign is typed CampaignId; a live slug is stored via cast (it
+    // only feeds routing + dataFor, both of which tolerate unknown slugs).
+    if (state.campaign !== campaign) set({ campaign: campaign as CampaignId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign]);
 
@@ -94,8 +108,10 @@ export function AppShell({
     }
   };
 
-  const setCampaign = (c: CampaignId) => {
-    set({ campaign: c, ...campaignResetPatch });
+  // Fixture ids and live slugs switch identically: reset per-campaign state and
+  // navigate to the same screen under the new slug (mirrors fixture switching).
+  const setCampaign = (c: string) => {
+    set({ campaign: c as CampaignId, ...campaignResetPatch });
     if (screen !== "admin" && screen !== "onboarding") {
       router.push(screenHref(c, screen));
     }
@@ -155,7 +171,7 @@ export function AppShell({
         <div style={{ width: 1, height: 20, background: "var(--border-default)" }} />
         <select
           value={campaign}
-          onChange={(e) => setCampaign(e.target.value as CampaignId)}
+          onChange={(e) => setCampaign(e.target.value)}
           style={{
             height: 30,
             padding: "0 28px 0 10px",
@@ -173,6 +189,11 @@ export function AppShell({
           {CAMPAIGNS.map((c) => (
             <option key={c.id} value={c.id}>
               {c.label}
+            </option>
+          ))}
+          {extraCampaigns.map((c) => (
+            <option key={c.slug} value={c.slug}>
+              {c.name}
             </option>
           ))}
         </select>

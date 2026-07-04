@@ -14,6 +14,8 @@ import { useApp } from "@/lib/state";
 import { onboardingPlans, onboardingSources, onboardingSteps } from "@/lib/data";
 import { Switch } from "@/components/ds";
 import { cardSurface, displayType, overline } from "@/lib/ui";
+import type { CampaignType } from "@/lib/campaignType";
+import { CAMPAIGN_TIMEZONES, DEFAULT_TIMEZONE_BY_COUNTRY } from "@/lib/timezones";
 
 export default function OnboardingPage() {
   const { state } = useApp();
@@ -52,6 +54,13 @@ function OnboardingScreen() {
   const router = useRouter();
   const { state, set } = useApp();
   const { obStep, obPlan, obSrcOff } = state;
+
+  // Local (mock) wizard choices. Campaign type drives the Keywords step labels;
+  // country seeds the timezone default. Not persisted — this is the mock flow.
+  const [obType, setObType] = React.useState<CampaignType>("candidate");
+  const [obCountry, setObCountry] = React.useState<"US" | "AU">("US");
+  const [obTz, setObTz] = React.useState<string>(DEFAULT_TIMEZONE_BY_COUNTRY.US);
+  const isIssue = obType === "issue";
 
   const next = () => {
     if (obStep === 4) {
@@ -140,16 +149,31 @@ function OnboardingScreen() {
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={overline}>Country</span>
-                <select style={selectStyle}>
-                  <option>United States</option>
-                  <option>Australia</option>
+                <select
+                  style={selectStyle}
+                  value={obCountry}
+                  onChange={(e) => {
+                    const c = e.target.value as "US" | "AU";
+                    setObCountry(c);
+                    setObTz(DEFAULT_TIMEZONE_BY_COUNTRY[c]);
+                  }}
+                >
+                  <option value="US">United States</option>
+                  <option value="AU">Australia</option>
                 </select>
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={overline}>Timezone</span>
-                <select style={selectStyle}>
-                  <option>America/Phoenix</option>
-                  <option>Australia/Sydney</option>
+                <select style={selectStyle} value={obTz} onChange={(e) => setObTz(e.target.value)}>
+                  {CAMPAIGN_TIMEZONES.map((g) => (
+                    <optgroup key={g.region} label={g.region}>
+                      {g.zones.map((z) => (
+                        <option key={z.value} value={z.value}>
+                          {z.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
               </label>
             </div>
@@ -187,8 +211,50 @@ function OnboardingScreen() {
 
         {obStep === 1 && (
           <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <span style={overline}>Campaign type</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {(
+                  [
+                    {
+                      id: "candidate",
+                      name: "Candidate campaign",
+                      desc: "A candidate or ticket in a race — tracked against an opponent.",
+                    },
+                    {
+                      id: "issue",
+                      name: "Issue campaign",
+                      desc: "A cause or movement, no candidate — tracked against its opposition.",
+                    },
+                  ] as { id: CampaignType; name: string; desc: string }[]
+                ).map((opt) => {
+                  const on = obType === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => setObType(opt.id)}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 4,
+                        padding: "12px 14px",
+                        borderRadius: 10,
+                        border: `1px solid ${on ? "var(--accent-border)" : "var(--border-subtle)"}`,
+                        background: on ? "var(--accent-subtle)" : "var(--surface-raised)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        fontFamily: "var(--font-ui)",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{opt.name}</span>
+                      <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.4 }}>{opt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={overline}>Candidate</span>
+              <span style={overline}>{isIssue ? "Campaign / cause" : "Candidate"}</span>
               <input defaultValue="Elena Ríos" style={inputStyle} />
             </label>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -246,7 +312,7 @@ function OnboardingScreen() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={overline}>Opponents</span>
+                <span style={overline}>{isIssue ? "Opposition" : "Opponents"}</span>
                 <input defaultValue="Dan Whitfield" style={inputStyle} />
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>

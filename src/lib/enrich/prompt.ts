@@ -12,9 +12,15 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import type { CampaignType } from "@/lib/campaignType";
 
-/** Bump when the prompt or tool schema changes in a way that affects output. */
-export const PROMPT_VERSION = "enrich-v1";
+/**
+ * Bump when the prompt or tool schema changes in a way that affects output.
+ * v2: the system prompt now varies by campaign_type — candidate mode is
+ * unchanged from v1; issue mode reframes the rubric around a cause vs its
+ * opposition (see buildSystemPrompt).
+ */
+export const PROMPT_VERSION = "enrich-v2";
 
 /** How many mentions we hand the model in a single Messages API call. */
 export const MODEL_BATCH = 10;
@@ -37,6 +43,12 @@ export interface OpenClusterRef {
 export interface EnrichContext {
   campaignName: string;
   country: string;
+  /**
+   * 'candidate' (our candidate vs an opponent) or 'issue' (a cause vs its
+   * opposition). Selects the wording of the keyword labels and the sentiment /
+   * message-box rubric in buildSystemPrompt. Defaults to 'candidate' upstream.
+   */
+  campaignType: CampaignType;
   keywords: EnrichKeywords;
   /** Our message-platform pillars, if the campaign has a platform document. */
   pillars: string[];
@@ -189,11 +201,32 @@ export function buildSystemPrompt(ctx: EnrichContext): string {
     ? ctx.pillars.map((p) => `- ${p}`).join("\n")
     : "(no message-platform pillars — set narrative_theme to null)";
 
+  const issue = ctx.campaignType === "issue";
+
+  // Keyword-list labels. Issue campaigns reframe "our candidate" as "our
+  // campaign" (the cause) and "the opponent" as "the opposition".
+  const ourKwLabel = issue ? "OUR CAMPAIGN keywords (the cause)" : "OUR CANDIDATE keywords";
+  const oppKwLabel = issue ? "OPPOSITION keywords" : "OPPONENT keywords";
+
+  // relevance / sentiment / message-box rubrics, parameterized by type. The
+  // candidate strings are byte-identical to v1.
+  const relevanceRubric = issue
+    ? "- relevance (0-100): how much this is genuinely about our campaign, the opposition, or a tracked issue. Below 30 means noise/off-topic."
+    : "- relevance (0-100): how much this is genuinely about our candidate, the opponent, or a tracked issue. Below 30 means noise/off-topic.";
+
+  const sentimentRubric = issue
+    ? "- sentiment (-100..100): STANCE toward OUR CAMPAIGN'S POSITION — support for the cause, its goals, or criticism of its opposition is positive; attacks on the cause or support for the opposing side is negative. Neutral/factual is near 0."
+    : "- sentiment (-100..100): STANCE toward OUR candidate, not raw tone. Praise of us or attacks on the opponent are positive; attacks on us or praise of the opponent are negative. Neutral/factual is near 0.";
+
+  const quadrantRubric = issue
+    ? "- message_box_quadrant: usUs (the campaign/cause talks about the campaign/cause), usThem (the campaign talks about the opposition), themUs (the opposition talks about the campaign/cause), themThem (the opposition talks about the opposition), or null if it doesn't fit."
+    : "- message_box_quadrant: usUs (we talk about us), usThem (we talk about them), themUs (they talk about us), themThem (they talk about them), or null if it doesn't fit.";
+
   return [
     `You are the enrichment engine for an election-monitoring platform. You score social and news mentions for the campaign "${ctx.campaignName}" (${ctx.country}).`,
     "",
-    "OUR CANDIDATE keywords: " + kw(ctx.keywords.candidate),
-    "OPPONENT keywords: " + kw(ctx.keywords.opponent),
+    ourKwLabel + ": " + kw(ctx.keywords.candidate),
+    oppKwLabel + ": " + kw(ctx.keywords.opponent),
     "TRACKED ISSUE keywords: " + kw(ctx.keywords.issue),
     "",
     "OUR MESSAGE-PLATFORM PILLARS:",
@@ -203,12 +236,12 @@ export function buildSystemPrompt(ctx: EnrichContext): string {
     clustersBlock,
     "",
     "For each mention, call emit_enrichments with exactly one result per ref. Scoring rubrics:",
-    "- relevance (0-100): how much this is genuinely about our candidate, the opponent, or a tracked issue. Below 30 means noise/off-topic.",
-    "- sentiment (-100..100): STANCE toward OUR candidate, not raw tone. Praise of us or attacks on the opponent are positive; attacks on us or praise of the opponent are negative. Neutral/factual is near 0.",
+    relevanceRubric,
+    sentimentRubric,
     "- entities: the notable people/orgs/places/issues named, each with kind (person|org|place|issue) and salience 0-1.",
     "- topics: 1-4 short lowercase tags.",
     "- narrative_theme: the single closest pillar label above, or null if no pillars are listed.",
-    "- message_box_quadrant: usUs (we talk about us), usThem (we talk about them), themUs (they talk about us), themThem (they talk about them), or null if it doesn't fit.",
+    quadrantRubric,
     "- cluster: {existing_id} to attach to an open cluster above; {new_label,new_summary} to open a new story when it clearly belongs to none; null when it isn't part of any story.",
     "Be precise and deterministic. Do not invent cluster ids.",
   ].join("\n");

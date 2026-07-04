@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CampaignId } from "@/lib/state";
 import type { KeywordKind } from "./types";
+import { asCampaignType, type CampaignType } from "@/lib/campaignType";
 import { createClient } from "@/lib/supabase/client";
 
 /** One editable keyword row, trimmed to the columns the card renders. */
@@ -36,6 +37,12 @@ export interface LiveKeyword {
 export interface KeywordManager {
   live: boolean;
   rows: LiveKeyword[];
+  /**
+   * The campaign's type, resolved from the same lookup as the uuid. Drives the
+   * keyword card's display terminology (kindLabel); defaults to 'candidate'
+   * (incl. in demo mode and before migration 0005 is applied).
+   */
+  campaignType: CampaignType;
   /** Insert a keyword; resolves to an error message on failure, null on success. */
   add(term: string, kind: KeywordKind): Promise<string | null>;
   /** Delete a keyword by id; resolves to an error message on failure, null on success. */
@@ -54,9 +61,14 @@ export interface KeywordManager {
  * mutation; there is no poll (writes are the only thing that change it here).
  */
 export function useKeywordManager(campaign: CampaignId): KeywordManager {
-  const [state, setState] = useState<{ live: boolean; rows: LiveKeyword[] }>({
+  const [state, setState] = useState<{
+    live: boolean;
+    rows: LiveKeyword[];
+    campaignType: CampaignType;
+  }>({
     live: false,
     rows: [],
+    campaignType: "candidate",
   });
   // Campaign uuid resolved once from the slug, then reused by every mutation so
   // we never re-resolve it per write. null until the first successful load.
@@ -66,23 +78,38 @@ export function useKeywordManager(campaign: CampaignId): KeywordManager {
     const supabase = createClient();
     if (!supabase) {
       campaignId.current = null;
-      setState({ live: false, rows: [] });
+      setState({ live: false, rows: [], campaignType: "candidate" });
       return;
     }
 
-    // Slug → campaign uuid. maybeSingle() tolerates zero rows (signed out, RLS
-    // hides the campaign) without erroring.
-    const { data: camp } = await supabase
+    // Slug → campaign uuid (+ campaign_type, for the card's terminology).
+    // maybeSingle() tolerates zero rows (signed out, RLS hides the campaign)
+    // without erroring. Prefer campaign_type (migration 0005); on a
+    // missing-column error retry without it and default to 'candidate', so the
+    // card works before 0005 is applied (migration-transition fallback).
+    let camp: { id: string; campaign_type?: string | null } | null = null;
+    const withType = await supabase
       .from("campaigns")
-      .select("id")
+      .select("id, campaign_type")
       .eq("slug", campaign)
       .maybeSingle();
+    if (withType.error) {
+      const noType = await supabase
+        .from("campaigns")
+        .select("id")
+        .eq("slug", campaign)
+        .maybeSingle();
+      camp = (noType.data as { id: string } | null) ?? null;
+    } else {
+      camp = (withType.data as { id: string; campaign_type?: string | null } | null) ?? null;
+    }
     if (!camp) {
       campaignId.current = null;
-      setState({ live: false, rows: [] });
+      setState({ live: false, rows: [], campaignType: "candidate" });
       return;
     }
-    campaignId.current = (camp as { id: string }).id;
+    campaignId.current = camp.id;
+    const campaignType = asCampaignType(camp.campaign_type);
 
     const { data, error } = await supabase
       .from("keywords")
@@ -94,10 +121,10 @@ export function useKeywordManager(campaign: CampaignId): KeywordManager {
     // rather than on row count: signed out, RLS returns zero rows without error.
     const { data: sess } = await supabase.auth.getSession();
     if (error || !data || !sess.session) {
-      setState({ live: false, rows: [] });
+      setState({ live: false, rows: [], campaignType });
       return;
     }
-    setState({ live: true, rows: data as LiveKeyword[] });
+    setState({ live: true, rows: data as LiveKeyword[], campaignType });
   }, [campaign]);
 
   useEffect(() => {
@@ -145,5 +172,12 @@ export function useKeywordManager(campaign: CampaignId): KeywordManager {
     [load]
   );
 
-  return { live: state.live, rows: state.rows, add, remove, toggle };
+  return {
+    live: state.live,
+    rows: state.rows,
+    campaignType: state.campaignType,
+    add,
+    remove,
+    toggle,
+  };
 }

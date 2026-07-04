@@ -167,6 +167,54 @@ run. The global request cap stops the sweep mid-run and reports `capped: true`.
    indicator (RLS scopes what each signed-in member sees — see §Backend live
    read path in docs/BACKEND.md).
 
+### Issue campaigns (a cause/movement, no candidate)
+
+SignalRoom supports ISSUE-BASED campaigns (e.g. "Farmers Fightback") alongside
+candidate campaigns. They use the same tables; `campaigns.campaign_type` is the
+discriminator (`'candidate'` default, or `'issue'`). The keyword `kind` enum is
+shared and read **generically** by type: for an issue campaign `kind
+'candidate'` means **our side** (the cause and its name variants) and `kind
+'opponent'` means **the opposition**; `'issue'` and `'misspelling'` are
+unchanged. Only display labels and the enrichment rubric adapt — the stored
+kinds do not.
+
+**Apply `supabase/migrations/0005_campaign_type.sql` in the Supabase SQL editor
+first** (it adds the `campaign_type` column). Then create one end-to-end. The
+`timezone` value is an IANA id — the setup UI offers the full Australian and US
+zone lists (`src/lib/timezones.ts`); here we use `Australia/Sydney`:
+
+```sql
+-- 1. Create the campaign (campaign_type 'issue' — a cause/movement, no candidate).
+insert into campaigns (slug, name, country, timezone, campaign_type)
+values ('farmers-fightback', 'Farmers Fightback', 'AU', 'Australia/Sydney', 'issue');
+
+-- 2. Make the signed-in user its owner (replace the email placeholder).
+insert into campaign_members (user_id, campaign_id, role)
+select u.id, c.id, 'owner'
+from auth.users u, campaigns c
+where u.email = 'you@example.org'          -- ← the signed-in operator's email
+  and c.slug = 'farmers-fightback';
+
+-- 3. Seed keywords. Kinds are generic for an issue campaign:
+--    'candidate' = OUR SIDE (the cause + its name variants),
+--    'opponent'  = THE OPPOSITION, 'issue' = a tracked issue.
+insert into keywords (campaign_id, term, kind, segment, is_active)
+select c.id, k.term, k.kind, k.segment, true
+from campaigns c
+join (values
+  ('Farmers Fightback',         'candidate', 'cause'),      -- our side (the cause)
+  ('supermarket price gouging', 'opponent',  'opposition'), -- the opposition
+  ('farm gate prices',          'issue',     'prices')      -- a tracked issue
+) as k(term, kind, segment) on true
+where c.slug = 'farmers-fightback';
+```
+
+Once those rows exist, sign in as the owner and open `/farmers-fightback/feed`
+— the campaign appears in the top-bar switcher (live campaigns are merged in
+after the fixtures), the Settings keywords card relabels the kinds ("campaign" /
+"opposition"), and enrichment scores mentions with the issue-mode rubric
+(`prompt_version` `enrich-v2`).
+
 ### KWatch.io — optional legacy social webhook
 
 No longer the primary trigger; kept as an optional supplementary source. If you
