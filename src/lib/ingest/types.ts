@@ -7,9 +7,11 @@
  * stamps campaign_id + inserts.
  *
  * Sources: ScrapeCreators (social keyword search), EnsembleData (TikTok keyword
- * search — takes over TikTok when a campaign keys it), and NewsData (news
- * keyword search). Dedupe is per (campaign_id, source, external_id), so the
- * runner routes each platform to exactly one source to avoid duplicate rows.
+ * search — takes over TikTok when a campaign keys it), NewsData (news keyword
+ * search, primary for news), and GNews (news fallback — runs only when a
+ * campaign lacks a NewsData key). Dedupe is per (campaign_id, source,
+ * external_id), so the runner routes each platform to exactly one source to
+ * avoid duplicate rows.
  */
 
 /** JSON-serialisable value, mirroring Supabase's jsonb column contract. */
@@ -29,8 +31,17 @@ export type IngestPlatform =
   | "threads"
   | "instagram";
 
-/** Every source that can write `mentions` rows through the ingest runner. */
-export type IngestSource = "scrapecreators" | "ensembledata" | "newsdata";
+/**
+ * Every source that can write `mentions` rows through the ingest runner.
+ * NewsData is the primary news source; GNews is its fallback (used only when a
+ * campaign has no NewsData key but does have a GNews key), so the two never
+ * write duplicate news rows under different sources.
+ */
+export type IngestSource =
+  | "scrapecreators"
+  | "ensembledata"
+  | "newsdata"
+  | "gnews";
 
 /**
  * Platforms a normalized row can carry: the social sweep platforms plus "news"
@@ -87,6 +98,13 @@ export interface CampaignSummary {
    * returned and may be approximate (see runIngest for the honest caveat).
    */
   skippedDuplicates: number;
+  /**
+   * Rows dropped by the recency filter this campaign: normalized rows whose
+   * published_at was non-null AND older than now − INGEST_MAX_AGE_DAYS. Rows
+   * with a null published_at are never counted here (age can't be judged, so
+   * they are kept). Dropped before persist, so they never reach `mentions`.
+   */
+  droppedStale: number;
   errors: IngestError[];
 }
 
@@ -95,6 +113,13 @@ export interface Summary {
   campaigns: CampaignSummary[];
   totalRequests: number;
   capped: boolean; // true when INGEST_MAX_REQUESTS stopped the run early
+  /**
+   * Total rows dropped by the recency filter across every campaign/source this
+   * run (sum of each CampaignSummary.droppedStale) — rows whose published_at was
+   * older than now − INGEST_MAX_AGE_DAYS. Surfaced so stale-drop volume is
+   * visible in the run summary/detail.
+   */
+  droppedStale: number;
   /**
    * Most-recent credit/unit balance seen per source this run, keyed by source
    * name (e.g. { scrapecreators: 8421 }). Only sources whose API responses

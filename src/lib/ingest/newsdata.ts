@@ -25,6 +25,9 @@ const SEARCH_PATH = "/api/1/latest";
 const REQUEST_TIMEOUT_MS = 25_000;
 const MAX_Q_ENCODED = 512; // q ≤ 512 chars once URL-encoded
 const PAGE_SIZE = "10";
+// NewsData's `timeframe` (latest endpoint) accepts whole hours up to 48; a
+// wider recency window is clamped to this so the API never rejects it.
+const MAX_TIMEFRAME_HOURS = 48;
 const LOG_PREFIX = "[ingest:newsdata]";
 
 /**
@@ -186,19 +189,37 @@ function normalizeNews(body: Record<string, unknown>): NormalizedMentionInput[] 
 }
 
 /**
+ * Translate a recency floor (ISO 8601) into NewsData's `timeframe` param — the
+ * whole-hours window between `fromIso` and now, clamped to [1, 48]. Returns null
+ * when `fromIso` is absent or unparseable so the caller simply omits the param.
+ */
+function timeframeHours(fromIso?: string): string | null {
+  if (!fromIso) return null;
+  const from = new Date(fromIso).getTime();
+  if (Number.isNaN(from)) return null;
+  const hours = Math.ceil((Date.now() - from) / 3_600_000);
+  const clamped = Math.min(Math.max(hours, 1), MAX_TIMEFRAME_HOURS);
+  return String(clamped);
+}
+
+/**
  * Search news for a campaign's keywords in one batched OR query (splitting only
  * when the query would exceed the URL budget) and return normalized mentions
  * (without campaign_id). `country` is the campaign country ('AU'|'US'); it is
- * lowercased to the NewsData country code. Throws NewsDataError on non-200.
+ * lowercased to the NewsData country code. `fromIso` is an optional recency
+ * floor, passed through as a `timeframe` (hours, clamped to NewsData's 48h max)
+ * so the API returns only recent items. Throws NewsDataError on non-200.
  */
 export async function searchNews(
   apiKey: string,
   keywords: string[],
-  country?: string
+  country?: string,
+  fromIso?: string
 ): Promise<NormalizedMentionInput[]> {
   const queries = buildQueries(keywords);
   const out: NormalizedMentionInput[] = [];
   const seen = new Set<string>();
+  const timeframe = timeframeHours(fromIso);
 
   for (const q of queries) {
     const params: Record<string, string> = {
@@ -209,6 +230,7 @@ export async function searchNews(
       removeduplicate: "1",
     };
     if (country) params.country = country.toLowerCase();
+    if (timeframe) params.timeframe = timeframe;
 
     const body = await ndGet(params);
     for (const row of normalizeNews(body)) {
