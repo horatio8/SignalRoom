@@ -83,6 +83,31 @@ function newsCountry(country: string | null): string | undefined {
 }
 
 /**
+ * Best-effort human-readable message for any thrown value. Error → .message;
+ * a plain object carrying a string `message` (e.g. a Supabase PostgrestError) →
+ * that message plus its `code`/`details` when present; any other object → JSON;
+ * else String(). Prevents "[object Object]" from masking real failures.
+ */
+function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === "string") {
+      const parts = [o.message];
+      if (typeof o.code === "string") parts.push(`(${o.code})`);
+      if (typeof o.details === "string" && o.details) parts.push(o.details);
+      return parts.join(" ");
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
+/**
  * Run one ingest pass across all active campaigns. Returns a structured
  * summary; throws only when Supabase admin is unconfigured (nothing to do).
  */
@@ -212,7 +237,11 @@ export async function runIngest(): Promise<Summary> {
       keyword: string,
       err: unknown
     ): boolean => {
-      const message = err instanceof Error ? err.message : String(err);
+      // Serialize richly: Supabase PostgrestErrors are plain objects, not Error
+      // instances, so `String(err)` would collapse them to "[object Object]" and
+      // hide the real cause (e.g. an ON CONFLICT mismatch). Prefer .message, then
+      // a JSON dump, before falling back to String().
+      const message = errMessage(err);
       campaignSummary.errors.push({ source, platform, keyword, message });
       console.log(
         `${LOG_PREFIX} error ${campaign.slug}/${source}/${platform}/${keyword}: ${message}`
