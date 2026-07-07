@@ -8,28 +8,49 @@
 
 import React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useApp, type CampaignId } from "@/lib/state";
-import { dataFor } from "@/lib/data";
+import { useApp } from "@/lib/state";
+import type { FeaturedCluster } from "@/lib/data";
 import { useLiveStories } from "@/lib/data/liveAnalytics";
 import { Sparkline } from "@/components/ds";
-import { PlatformChip } from "@/components/app/PlatformChip";
+import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, heatTone, monoMeta, overline, sentTone, signed } from "@/lib/ui";
 
+/**
+ * Neutral fallback for the featured card's two fields the clusters table cannot
+ * supply: the per-hour velocity sparkline (no cluster time-series is stored) and
+ * a null origin path. spark = [] renders nothing rather than a fabricated line.
+ */
+const NEUTRAL_FC: FeaturedCluster = {
+  label: "",
+  vel: "—",
+  velBg: "var(--heat-0)",
+  border: "var(--border-subtle)",
+  status: "open",
+  coordinated: false,
+  sentV: 0,
+  meta: "",
+  summary: "",
+  path: "origin → spread path pending",
+  spark: [],
+  sparkBaseline: 0,
+  sparkColor: "var(--heat-4)",
+  mediaMixPct: 0,
+  mixLabel: "mix pending",
+  mentionsLabel: "View mentions",
+};
+
 export default function StoriesPage() {
-  const { campaign } = useParams<{ campaign: CampaignId }>();
+  const { campaign } = useParams<{ campaign: string }>();
   const router = useRouter();
   const { state, set } = useApp();
-  const D = dataFor(campaign);
   const canManage = state.role !== "client";
   const { storyTab } = state;
 
-  // Live clusters (RLS-scoped) drive the Clusters tab — featured card + list —
-  // when present; the Opposition ads and Press corps tabs stay fixture (F1/F2
-  // tables, not clusters). D.fc is the fallback for the two fields clusters
-  // cannot supply (velocity sparkline + null origin path).
-  const live = useLiveStories(campaign, D.fc);
-  const fc = live.live ? live.fc : D.fc;
-  const otherClusters = live.live ? live.otherClusters : D.otherClusters;
+  // Live clusters (RLS-scoped) drive the Clusters tab — featured card + list.
+  // The Opposition ads and Press corps tabs are not wired to live data yet.
+  const live = useLiveStories(campaign, NEUTRAL_FC);
+  const fc = live.fc;
+  const otherClusters = live.otherClusters;
   const fss = sentTone(fc.sentV);
 
   const tabs = [
@@ -42,7 +63,6 @@ export default function StoriesPage() {
     <div data-screen-label="S3 Stories" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Stories</span>
-        <span style={monoMeta}>5 open clusters · 2 fading</span>
         {live.live && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={overline}>live</span>
@@ -82,7 +102,16 @@ export default function StoriesPage() {
         })}
       </div>
 
-      {storyTab === "clusters" && (
+      {storyTab === "clusters" && !live.live && (
+        <div style={{ ...cardSurface }}>
+          <EmptyState
+            title="No stories yet"
+            note="Stories form automatically as mentions are enriched and clustered."
+          />
+        </div>
+      )}
+
+      {storyTab === "clusters" && live.live && (
         <>
           {/* Featured hot cluster */}
           <div
@@ -322,121 +351,20 @@ export default function StoriesPage() {
       )}
 
       {storyTab === "ads" && (
-        <>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "10px 14px",
-              borderRadius: 10,
-              background: "var(--warn-subtle)",
-              border: "1px solid var(--warn)",
-            }}
-          >
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, color: "var(--warn-text)" }}>▲ NEW</span>
-            <span style={{ fontSize: 12.5, color: "var(--text-primary)" }}>{D.adsNote}</span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12 }}>
-            {D.oppoAds.map((ad, i) => {
-              const active = ad.active === "active";
-              return (
-                <div key={i} style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <PlatformChip pf={ad.pf} size={24} />
-                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{ad.advertiser}</span>
-                    <span
-                      style={{
-                        marginLeft: "auto",
-                        fontSize: 10.5,
-                        fontWeight: 500,
-                        padding: "2px 8px",
-                        borderRadius: 6,
-                        background: active ? "var(--pos-subtle)" : "var(--surface-raised)",
-                        color: active ? "var(--pos-text)" : "var(--text-tertiary)",
-                      }}
-                    >
-                      {ad.active}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--text-secondary)", fontStyle: "italic" }}>
-                    “{ad.creative}”
-                  </span>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11,
-                      color: "var(--text-tertiary)",
-                      marginTop: "auto",
-                    }}
-                  >
-                    <span>
-                      spend {ad.spend} · impr {ad.impressions}
-                    </span>
-                    <span>
-                      {ad.regions} · {ad.dates}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <span style={monoMeta}>source: Meta Ad Library + Google Ads Transparency · pulled daily per tracked opponent</span>
-        </>
+        <div style={{ ...cardSurface }}>
+          <EmptyState
+            title="Opposition ads"
+            note="Not available yet — opponent ad tracking (Meta Ad Library + Google Ads Transparency) isn't wired to live data."
+          />
+        </div>
       )}
 
       {storyTab === "press" && (
-        <div style={{ ...cardSurface, overflow: "hidden" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "2fr 1.4fr 0.8fr 0.9fr 1fr",
-              gap: 12,
-              padding: "10px 16px",
-              borderBottom: "1px solid var(--border-subtle)",
-              ...overline,
-            }}
-          >
-            <span>Journalist</span>
-            <span>Outlet</span>
-            <span>Articles</span>
-            <span>Avg sentiment</span>
-            <span>Last wrote</span>
-          </div>
-          {D.pressCorps.map((j) => (
-            <div
-              key={j.name}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2fr 1.4fr 0.8fr 0.9fr 1fr",
-                gap: 12,
-                padding: "12px 16px",
-                borderBottom: "1px solid var(--border-subtle)",
-                alignItems: "center",
-              }}
-            >
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{j.name}</span>
-              <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{j.outlet}</span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>{j.count}</span>
-              <span
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  color: j.sentV > 10 ? "var(--pos-text)" : j.sentV < -10 ? "var(--neg-text)" : "var(--warn-text)",
-                }}
-              >
-                {signed(j.sentV)}
-              </span>
-              <span style={monoMeta}>{j.last}</span>
-            </div>
-          ))}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12, color: "var(--text-secondary)" }}>
-            Built from your own coverage bylines · pairs with Amplify media-release rails for distribution
-          </div>
+        <div style={{ ...cardSurface }}>
+          <EmptyState
+            title="Press corps"
+            note="Not available yet — the journalist byline breakdown isn't wired to live data."
+          />
         </div>
       )}
     </div>

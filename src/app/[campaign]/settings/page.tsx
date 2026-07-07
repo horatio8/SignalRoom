@@ -2,28 +2,28 @@
 
 /**
  * S6 Settings — /[campaign]/settings (operator+)
- * Keywords CRUD + "Push to sources" (KWatch/Apify config push, §4) · podcast
- * shows (F4) · source health grid · delivery (M3/M4) · honest limits (§15.5).
+ * Live Keywords CRUD (useKeywordManager) + Client integrations (BYOK) are real.
+ * Podcast shows, source health, and delivery aren't wired to live data yet, so
+ * they show honest placeholders. Honest limits (§15.5) stays.
  */
 
 import React from "react";
 import { useParams } from "next/navigation";
-import { useApp, type CampaignId } from "@/lib/state";
-import { dataFor, sourceHealth, type KeywordKind } from "@/lib/data";
+import { useApp } from "@/lib/state";
+import type { KeywordKind } from "@/lib/data";
 import { useKeywordManager, type LiveKeyword } from "@/lib/data/keywords";
 import { kindLabel } from "@/lib/campaignType";
 import { Switch } from "@/components/ds";
+import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
 import { SURVEY_TOOLS } from "@/lib/integrations";
 
 export default function SettingsPage() {
-  const { campaign } = useParams<{ campaign: CampaignId }>();
+  const { campaign } = useParams<{ campaign: string }>();
   const { state, set, notify } = useApp();
-  const D = dataFor(campaign);
 
-  // Second live surface: when Supabase is live and a session exists, the
-  // keywords card manages real `keywords` rows; otherwise it stays in demo mode
-  // (fixtures + customKeywords + "Push to sources"), exactly as before.
+  // Live surface: the keywords card manages real `keywords` rows through the
+  // manager (RLS-scoped read + owner/operator writes).
   const km = useKeywordManager(campaign);
   const [kwKind, setKwKind] = React.useState<KeywordKind>("issue");
 
@@ -64,25 +64,7 @@ export default function SettingsPage() {
 
   const maskKey = (v: string) => "••••" + v.slice(-4);
 
-  const keywords = [...D.keywords, ...state.customKeywords];
-  const recipients = [...D.recipients, ...state.addedRecipients];
-
-  const addKw = () => {
-    const term = state.kwInput.trim();
-    if (!term) return;
-    set((s) => ({
-      customKeywords: [...s.customKeywords, { id: "ck" + Date.now(), term, kind: "issue" as const, matches: "—" }],
-      kwInput: "",
-    }));
-    notify("Keyword added — push to sources to sync KWatch + Apify");
-  };
-
-  const pushKeywords = () => {
-    set({ pushed: true });
-    setTimeout(() => set({ pushed: false }), 2500);
-  };
-
-  // Live-mode keyword mutations. Each surfaces the manager's error string via a
+  // Live keyword mutations. Each surfaces the manager's error string via a
   // toast (RLS denials land here for client_viewers), or a short confirmation on
   // success. The list refresh is owned by the manager.
   const addKwLive = async () => {
@@ -106,13 +88,6 @@ export default function SettingsPage() {
     notify("Keyword removed");
   };
 
-  const addRecipient = () => {
-    const email = state.rcInput.trim();
-    if (!email) return;
-    set((s) => ({ addedRecipients: [...s.addedRecipients, { email, gets: "briefing" }], rcInput: "" }));
-    notify("Recipient added — no account needed, delivery starts with the next briefing");
-  };
-
   const selectStyle: React.CSSProperties = {
     height: 32,
     padding: "0 10px",
@@ -129,9 +104,7 @@ export default function SettingsPage() {
     <div data-screen-label="S6 Settings" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Settings</span>
-        <span style={monoMeta}>
-          {D.name} · {D.code} · {D.tz}
-        </span>
+        <span style={monoMeta}>{campaign}</span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 12, alignItems: "start" }}>
@@ -149,37 +122,11 @@ export default function SettingsPage() {
               }}
             >
               <span style={{ fontSize: 16, fontWeight: 600 }}>Keywords</span>
-              <span style={monoMeta}>
-                {km.live
-                  ? `${km.rows.filter((r) => r.is_active).length} active`
-                  : "12 active · incl. Español group"}
+              <span style={monoMeta}>{km.rows.filter((r) => r.is_active).length} active</span>
+              {/* Sources read active keywords every sweep, so there's nothing to push. */}
+              <span style={{ ...monoMeta, marginLeft: "auto" }}>
+                sources poll active keywords · changes apply at the next hourly sweep
               </span>
-              {km.live ? (
-                // Polling makes the push obsolete: sources read active keywords
-                // every sweep, so there is nothing to push.
-                <span style={{ ...monoMeta, marginLeft: "auto" }}>
-                  sources poll active keywords · changes apply at the next hourly sweep
-                </span>
-              ) : (
-                <button
-                  onClick={pushKeywords}
-                  style={{
-                    marginLeft: "auto",
-                    height: 28,
-                    padding: "0 12px",
-                    borderRadius: 8,
-                    border: "none",
-                    background: "var(--accent)",
-                    color: "#fff",
-                    fontFamily: "var(--font-ui)",
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: "pointer",
-                  }}
-                >
-                  {state.pushed ? "✓ Pushed to KWatch + Apify" : "Push to sources"}
-                </button>
-              )}
             </div>
             <div
               style={{
@@ -194,9 +141,9 @@ export default function SettingsPage() {
                 value={state.kwInput}
                 onChange={(e) => set({ kwInput: e.target.value })}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") km.live ? void addKwLive() : addKw();
+                  if (e.key === "Enter") void addKwLive();
                 }}
-                placeholder='new term — boolean ok: "voss" AND (water OR CAP)'
+                placeholder='new term — boolean ok: "candidate" AND (water OR CAP)'
                 style={{
                   flex: 1,
                   minWidth: 0,
@@ -211,22 +158,20 @@ export default function SettingsPage() {
                   outline: "none",
                 }}
               />
-              {km.live && (
-                <select
-                  value={kwKind}
-                  onChange={(e) => setKwKind(e.target.value as KeywordKind)}
-                  style={{ ...selectStyle, height: 30, flex: "none" }}
-                >
-                  {/* Values stay the DB enums; labels adapt to the campaign type
-                      (issue campaigns relabel candidate→campaign, opponent→opposition). */}
-                  <option value="candidate">{kindLabel("candidate", km.campaignType)}</option>
-                  <option value="opponent">{kindLabel("opponent", km.campaignType)}</option>
-                  <option value="issue">{kindLabel("issue", km.campaignType)}</option>
-                  <option value="misspelling">{kindLabel("misspelling", km.campaignType)}</option>
-                </select>
-              )}
+              <select
+                value={kwKind}
+                onChange={(e) => setKwKind(e.target.value as KeywordKind)}
+                style={{ ...selectStyle, height: 30, flex: "none" }}
+              >
+                {/* Values stay the DB enums; labels adapt to the campaign type
+                    (issue campaigns relabel candidate→campaign, opponent→opposition). */}
+                <option value="candidate">{kindLabel("candidate", km.campaignType)}</option>
+                <option value="opponent">{kindLabel("opponent", km.campaignType)}</option>
+                <option value="issue">{kindLabel("issue", km.campaignType)}</option>
+                <option value="misspelling">{kindLabel("misspelling", km.campaignType)}</option>
+              </select>
               <button
-                onClick={() => (km.live ? void addKwLive() : addKw())}
+                onClick={() => void addKwLive()}
                 style={{
                   height: 30,
                   padding: "0 12px",
@@ -243,8 +188,13 @@ export default function SettingsPage() {
                 Add keyword
               </button>
             </div>
-            {km.live
-              ? km.rows.map((row) => {
+            {km.rows.length === 0 ? (
+              <EmptyState
+                title="No keywords yet"
+                note="Add a term above; sources pick it up at the next hourly sweep."
+              />
+            ) : (
+              km.rows.map((row) => {
                   const kt = kindTone(row.kind);
                   return (
                     <div
@@ -307,250 +257,37 @@ export default function SettingsPage() {
                     </div>
                   );
                 })
-              : keywords.map((k) => {
-              const off = state.kwOff.includes(k.id);
-              const kt = kindTone(k.kind);
-              return (
-                <div
-                  key={k.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    padding: "10px 16px",
-                    borderBottom: "1px solid var(--border-subtle)",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 12.5,
-                      flex: 1,
-                      minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {k.term}
-                  </span>
-                  <span
-                    style={{
-                      flex: "none",
-                      fontSize: 11,
-                      fontWeight: 500,
-                      padding: "2px 8px",
-                      borderRadius: 6,
-                      background: kt.kindBg,
-                      color: kt.kindFg,
-                    }}
-                  >
-                    {k.kind}
-                  </span>
-                  <span style={{ ...monoMeta, flex: "none" }}>{k.matches} /24h</span>
-                  <Switch
-                    checked={!off}
-                    onChange={() =>
-                      set((s) => ({
-                        kwOff: off ? s.kwOff.filter((i) => i !== k.id) : [...s.kwOff, k.id],
-                      }))
-                    }
-                  />
-                </div>
-              );
-            })}
+            )}
             <div style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--text-tertiary)" }}>
               keyword groups are reusable segments across feed, rules, and reports
             </div>
           </div>
 
-          {/* Podcast shows */}
-          <div style={{ ...cardSurface, overflow: "hidden" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "14px 16px",
-                borderBottom: "1px solid var(--border-subtle)",
-              }}
-            >
-              <span style={{ fontSize: 16, fontWeight: 600 }}>Podcast shows</span>
-              <span style={monoMeta}>PodcastIndex → Whisper transcripts</span>
-              <button
-                style={{
-                  marginLeft: "auto",
-                  height: 28,
-                  padding: "0 12px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: "var(--surface-raised)",
-                  fontFamily: "var(--font-ui)",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  color: "var(--text-primary)",
-                  cursor: "pointer",
-                }}
-              >
-                + Add show
-              </button>
-            </div>
-            {D.podcasts.map((p) => (
-              <div
-                key={p.name}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "10px 16px",
-                  borderBottom: "1px solid var(--border-subtle)",
-                }}
-              >
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    minWidth: 28,
-                    height: 20,
-                    borderRadius: 6,
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-default)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 9.5,
-                    fontWeight: 600,
-                    color: "var(--text-secondary)",
-                    flex: "none",
-                  }}
-                >
-                  POD
-                </span>
-                <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{p.name}</span>
-                <span style={monoMeta}>{p.meta}</span>
-              </div>
-            ))}
+          {/* Podcast shows — not wired to live data yet */}
+          <div style={{ ...cardSurface }}>
+            <EmptyState
+              title="Podcast shows"
+              note="Not available yet — podcast tracking (PodcastIndex → Whisper transcripts) isn't wired to live data."
+            />
           </div>
         </div>
 
         {/* Right column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Source health */}
+          {/* Source health — awaiting live ingest metrics */}
           <div style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
             <span style={{ fontSize: 16, fontWeight: 600 }}>Source health</span>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {sourceHealth.map((sh) => (
-                <div
-                  key={sh.name}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-subtle)",
-                  }}
-                >
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: sh.dot, flex: "none" }} />
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 600 }}>{sh.name}</span>
-                    <span
-                      style={{
-                        marginLeft: "auto",
-                        fontSize: 9.5,
-                        fontWeight: 600,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                        color: sh.fg,
-                      }}
-                    >
-                      {sh.status}
-                    </span>
-                  </span>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-tertiary)" }}>{sh.meta}</span>
-                </div>
-              ))}
-            </div>
+            <span style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-tertiary)" }}>
+              Live source health — coming with ingest metrics.
+            </span>
           </div>
 
-          {/* Delivery */}
-          <div style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Delivery</span>
-            <div style={{ display: "flex", gap: 12 }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-                <span style={overline}>Briefing hour</span>
-                <select style={selectStyle} defaultValue="06:00">
-                  <option>06:00</option>
-                  <option>05:00</option>
-                  <option>07:00</option>
-                </select>
-              </label>
-              <label style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-                <span style={overline}>Second digest</span>
-                <select style={selectStyle} defaultValue="16:00 mini-brief">
-                  <option>16:00 mini-brief</option>
-                  <option>off</option>
-                </select>
-              </label>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <span style={overline}>Recipients · no account needed</span>
-              {recipients.map((rc) => (
-                <div key={rc.email} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 12,
-                      flex: 1,
-                      minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {rc.email}
-                  </span>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-tertiary)" }}>{rc.gets}</span>
-                </div>
-              ))}
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  value={state.rcInput}
-                  onChange={(e) => set({ rcInput: e.target.value })}
-                  placeholder="name@campaign.org"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    height: 28,
-                    padding: "0 10px",
-                    borderRadius: 8,
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-default)",
-                    fontFamily: "var(--font-ui)",
-                    fontSize: 12,
-                    color: "var(--text-primary)",
-                    outline: "none",
-                  }}
-                />
-                <button
-                  onClick={addRecipient}
-                  style={{
-                    height: 28,
-                    padding: "0 10px",
-                    borderRadius: 8,
-                    border: "1px solid var(--border-default)",
-                    background: "var(--surface-raised)",
-                    fontFamily: "var(--font-ui)",
-                    fontSize: 11.5,
-                    fontWeight: 500,
-                    color: "var(--text-primary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-            </div>
+          {/* Delivery — not wired to live data yet */}
+          <div style={{ ...cardSurface }}>
+            <EmptyState
+              title="Delivery"
+              note="Not available yet — briefing schedule and recipients aren't wired to live data."
+            />
           </div>
 
           {/* Client integrations */}

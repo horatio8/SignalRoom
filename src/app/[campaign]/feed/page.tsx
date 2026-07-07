@@ -8,28 +8,36 @@
 
 import React from "react";
 import { useParams } from "next/navigation";
-import { useApp, type CampaignId } from "@/lib/state";
-import { dataFor } from "@/lib/data";
+import { useApp } from "@/lib/state";
 import { useLiveMentions } from "@/lib/data/live";
+import { EmptyState } from "@/components/app/EmptyState";
 import { PlatformChip } from "@/components/app/PlatformChip";
 import { chipTone, displayType, monoMeta, overline, sentTone, signed } from "@/lib/ui";
 import { cardSurface } from "@/lib/ui";
 
 export default function FeedPage() {
-  const { campaign } = useParams<{ campaign: CampaignId }>();
+  const { campaign } = useParams<{ campaign: string }>();
   const { state, set, notify } = useApp();
-  const D = dataFor(campaign);
   const canManage = state.role !== "client";
   const { feedTab, seg, hiddenIds } = state;
 
-  // Live rows (RLS-scoped) replace fixtures when present; otherwise fall back.
+  // Live rows (RLS-scoped) are the only source now; manual adds sit on top.
   const liveData = useLiveMentions(campaign);
-  const baseMentions = liveData.live ? liveData.mentions : D.mentions;
+  const allRows = [...state.addedMentions, ...liveData.mentions];
 
-  // Media-type + segment chips are unchanged: "all" (the default + campaign
-  // reset) shows every row, so live rows whose topic-derived segs don't match a
-  // fixture chip still render; picking a specific chip filters as designed.
-  const rows = [...state.addedMentions, ...baseMentions].filter(
+  // Media-type tabs + segment chips derive from the live rows themselves:
+  // counts are real, and segments come straight from enrichment topics[].
+  const feedTabs = [
+    { id: "all", label: "All", count: String(allRows.length) },
+    { id: "news", label: "Media", count: String(allRows.filter((m) => m.media === "news").length) },
+    { id: "social", label: "Social", count: String(allRows.filter((m) => m.media === "social").length) },
+  ];
+  const segTopics = Array.from(new Set(allRows.flatMap((m) => m.segs))).sort();
+  const segs = [{ id: "all", label: "All" }, ...segTopics.map((t) => ({ id: t, label: t }))];
+
+  // "all" (the default + campaign reset) shows every row; picking a specific
+  // media type or segment filters as designed.
+  const rows = allRows.filter(
     (m) => (feedTab === "all" || m.media === feedTab) && (seg === "all" || m.segs.includes(seg))
   );
 
@@ -68,7 +76,7 @@ export default function FeedPage() {
     <div data-screen-label="S2 Feed" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ ...displayType, fontSize: 20, fontWeight: 600 }}>Mention feed</span>
-        <span style={monoMeta}>relevance ≥ 30 gate on · 96 low-relevance items hidden today</span>
+        <span style={monoMeta}>relevance ≥ 30 gate on</span>
         {liveData.live && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={overline}>live</span>
@@ -151,7 +159,7 @@ export default function FeedPage() {
       )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        {D.feedTabs.map((t) => {
+        {feedTabs.map((t) => {
           const c = chipTone(feedTab === t.id);
           return (
             <button
@@ -179,7 +187,7 @@ export default function FeedPage() {
         })}
         <span style={{ width: 1, height: 16, background: "var(--border-default)", margin: "0 4px" }} />
         <span style={overline}>Segments</span>
-        {D.segs.map((g) => {
+        {segs.map((g) => {
           const c = chipTone(seg === g.id);
           return (
             <button
@@ -207,6 +215,13 @@ export default function FeedPage() {
       </div>
 
       <div style={{ ...cardSurface, overflow: "hidden" }}>
+        {allRows.length === 0 ? (
+          <EmptyState
+            title="No mentions yet"
+            note="Ingest runs hourly. Mentions appear here once a sweep captures a match."
+          />
+        ) : (
+          <>
         {rows.map((m) => {
           const hidden = hiddenIds.includes(m.id);
           const ss = sentTone(m.sentV);
@@ -311,6 +326,8 @@ export default function FeedPage() {
         <div style={{ display: "flex", justifyContent: "center", padding: 12, ...monoMeta }}>
           — syndicated copies collapsed · 24-month hot retention —
         </div>
+          </>
+        )}
       </div>
     </div>
   );

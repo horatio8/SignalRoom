@@ -62,16 +62,19 @@ function OnboardingScreen() {
   const [obTz, setObTz] = React.useState<string>(DEFAULT_TIMEZONE_BY_COUNTRY.US);
   const isIssue = obType === "issue";
 
+  // Home ("/") resolves to the user's first live campaign when there is no
+  // current slug yet (e.g. onboarding a brand-new account).
+  const homeHref = state.campaign ? `/${state.campaign}/overview` : "/";
   const next = () => {
     if (obStep === 4) {
       set({ obStep: 0 });
-      router.push(`/${state.campaign}/overview`);
+      router.push(homeHref);
     } else {
       set({ obStep: obStep + 1 });
     }
   };
   const back = () => {
-    if (obStep === 0) router.push(`/${state.campaign}/overview`);
+    if (obStep === 0) router.push(homeHref);
     else set({ obStep: obStep - 1 });
   };
 

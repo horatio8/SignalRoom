@@ -20,7 +20,8 @@ import React, {
 } from "react";
 
 export type Role = "owner" | "operator" | "client";
-export type CampaignId = "voss" | "marsh";
+/** A campaign slug. Was a fixture union ("voss" | "marsh"); now any live slug. */
+export type CampaignId = string;
 
 export interface AddedMention {
   id: number;
@@ -139,7 +140,8 @@ export interface AppState {
 export const initialState: AppState = {
   role: "operator",
   dark: false,
-  campaign: "voss",
+  // Empty until routing sets it from the URL slug (the [campaign] layout owns it).
+  campaign: "",
   feedTab: "all",
   seg: "all",
   hiddenIds: [],

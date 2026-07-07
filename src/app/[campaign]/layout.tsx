@@ -3,8 +3,7 @@
 import React from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { AppShell } from "@/components/app/AppShell";
-import { isCampaignId } from "@/lib/data";
-import { useLiveCampaign } from "@/lib/data/liveCampaigns";
+import { useLiveCampaigns } from "@/lib/data/liveCampaigns";
 
 export default function CampaignLayout({ children }: { children: React.ReactNode }) {
   const params = useParams<{ campaign: string }>();
@@ -12,23 +11,25 @@ export default function CampaignLayout({ children }: { children: React.ReactNode
   const router = useRouter();
   const campaign = params.campaign;
 
-  // A slug is allowed through if it's a fixture id OR a live campaign the user
-  // can see (RLS-scoped). Fixtures are decided synchronously; live campaigns
-  // require the async lookup, so only consult it for non-fixture slugs.
-  const fixture = isCampaignId(campaign);
-  const live = useLiveCampaign(campaign);
-  const allowed = fixture || live.exists;
-  // For a non-fixture slug, wait for the lookup to settle before deciding —
-  // `pending` true means "render nothing, don't redirect yet" (no flash).
-  const pending = !fixture && live.loading;
+  // A slug is admitted only when it's a confirmed live campaign the user can
+  // see (RLS-scoped). The lookup is async, so consult `loading` before treating
+  // an absent slug as truly missing.
+  const { campaigns, loading } = useLiveCampaigns();
+  const exists = campaigns.some((c) => c.slug === campaign);
 
   React.useEffect(() => {
-    if (!allowed && !pending) router.replace("/voss/overview");
-  }, [allowed, pending, router]);
+    if (loading) return;
+    // Confirmed absent: send the user to their first available campaign, or to
+    // onboarding when they have none.
+    if (!exists) {
+      const first = campaigns[0];
+      router.replace(first ? `/${first.slug}/overview` : "/onboarding");
+    }
+  }, [loading, exists, campaigns, router]);
 
-  // Render nothing while a non-fixture slug is still being resolved, or once it
-  // is confirmed absent (the effect above is redirecting).
-  if (!allowed) return null;
+  // Render nothing while the lookup is in flight (no flash), or once the slug is
+  // confirmed absent (the effect above is redirecting).
+  if (loading || !exists) return null;
 
   const screen = pathname.split("/").filter(Boolean)[1] ?? "overview";
 
