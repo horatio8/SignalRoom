@@ -19,6 +19,7 @@ const PUBLIC_PREFIXES = [
   "/login",
   "/auth", // /auth/callback (code exchange) + any future auth routes
   "/api/ingest", // per-source webhooks authenticate with x-ingest-key, not a session
+  "/api/cron", // scheduled jobs authenticate with the CRON_SECRET bearer, not a session
   "/_next",
   "/favicon",
   "/icon",
