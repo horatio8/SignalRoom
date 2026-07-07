@@ -13,9 +13,18 @@
  *     removed from the ScrapeCreators sweep and polled via EnsembleData instead.
  *   • NewsData, when keyed, runs ONE batched OR query per campaign (all keywords
  *     in a single request) — the news credit saver, and the PRIMARY news source.
- *   • GNews is the news FALLBACK: it runs only when a campaign has no NewsData
- *     key but does have a GNews key. Both keyed → NewsData wins, GNews idle, so
- *     the same story never lands twice under two sources.
+ *   • GNews is the news GAP-FILLER: when keyed it runs ALONGSIDE NewsData, but
+ *     before persisting its rows the runner drops any story already captured for
+ *     the campaign — matched on a normalized URL or title against the NewsData
+ *     rows just fetched this run AND the campaign's recent `mentions` news rows.
+ *     Only net-new GNews stories are stored (counted as crossSourceSkipped when
+ *     dropped). When only ONE news source is keyed, that one runs on its own.
+ *
+ * SOURCE SELECTION — runIngest accepts an optional { only?: IngestSource[] } to
+ * restrict which sources run; sources outside `only` are skipped entirely (no
+ * credentials resolved, no requests). The GNews gap-filler still dedupes against
+ * existing DB news even in an only:['gnews'] backfill, so it never re-stores what
+ * NewsData already persisted.
  *
  * RECENCY FILTER — every source's normalized rows pass through a recency gate
  * before persist: any row whose published_at is non-null AND older than now −
@@ -87,6 +96,72 @@ function resolveMaxAgeDays(): number {
   return Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_MAX_AGE_DAYS;
 }
 
+/**
+ * Cross-source news dedupe keys (§ingest CHANGE 1). Two news items are treated
+ * as the same story when they share a normalized URL OR a normalized title.
+ * This catches same-URL syndication and identical headlines reprinted across
+ * outlets — it does NOT catch every semantically-duplicate story rewritten with
+ * a different headline on a different domain. That would need a similarity model;
+ * URL/title matching is a cheap, deterministic way to minimize obvious
+ * redundancy between NewsData (primary) and the GNews gap-filler.
+ */
+
+/**
+ * Normalize a URL to a comparison key: lowercase, strip protocol (and any
+ * protocol-relative `//`), strip a leading `www.`, drop the query string and
+ * fragment, and strip trailing slashes. Returns null when nothing remains.
+ */
+function normalizeUrlKey(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let s = url.trim().toLowerCase();
+  if (!s) return null;
+  const hash = s.indexOf("#");
+  if (hash !== -1) s = s.slice(0, hash); // strip fragment
+  const query = s.indexOf("?");
+  if (query !== -1) s = s.slice(0, query); // strip query string
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, ""); // strip scheme://
+  s = s.replace(/^\/\//, ""); // strip protocol-relative //
+  s = s.replace(/^www\./, ""); // strip leading www.
+  s = s.replace(/\/+$/, ""); // strip trailing slash(es)
+  return s.length ? s : null;
+}
+
+/**
+ * Normalize a title to a comparison key: lowercase, collapse internal runs of
+ * whitespace to a single space, and trim. Returns null when nothing remains.
+ */
+function normalizeTitleKey(title: string | null | undefined): string | null {
+  if (!title) return null;
+  const s = title.toLowerCase().replace(/\s+/g, " ").trim();
+  return s.length ? s : null;
+}
+
+/**
+ * Add a captured news item's normalized URL and title keys to a dedupe set.
+ * Keys are namespaced (`u:` / `t:`) so a URL can never collide with a title.
+ */
+function addCapturedNewsKeys(
+  set: Set<string>,
+  item: { url?: string | null; title?: string | null }
+): void {
+  const u = normalizeUrlKey(item.url);
+  if (u) set.add(`u:${u}`);
+  const t = normalizeTitleKey(item.title);
+  if (t) set.add(`t:${t}`);
+}
+
+/** True when the item's normalized URL OR title already appears in the set. */
+function isNewsAlreadyCaptured(
+  set: Set<string>,
+  item: { url?: string | null; title?: string | null }
+): boolean {
+  const u = normalizeUrlKey(item.url);
+  if (u && set.has(`u:${u}`)) return true;
+  const t = normalizeTitleKey(item.title);
+  if (t && set.has(`t:${t}`)) return true;
+  return false;
+}
+
 interface CampaignRow {
   id: string;
   slug: string;
@@ -129,12 +204,28 @@ function errMessage(err: unknown): string {
 /**
  * Run one ingest pass across all active campaigns. Returns a structured
  * summary; throws only when Supabase admin is unconfigured (nothing to do).
+ *
+ * `opts.only` restricts which sources run: when set (and non-empty), sources not
+ * listed are skipped entirely — no credentials resolved, no requests. Undefined
+ * (or empty) runs all sources as usual.
  */
-export async function runIngest(): Promise<Summary> {
+export async function runIngest(opts?: {
+  only?: IngestSource[];
+}): Promise<Summary> {
   const admin = supabaseAdmin();
   if (!admin) {
     throw new Error(
       "ingest not configured: Supabase service role client unavailable"
+    );
+  }
+
+  // Which sources are allowed to run this pass. null → all sources.
+  const only =
+    opts?.only && opts.only.length ? new Set<IngestSource>(opts.only) : null;
+  const sourceEnabled = (s: IngestSource): boolean => !only || only.has(s);
+  if (only) {
+    console.log(
+      `${LOG_PREFIX} source filter active: only [${[...only].join(", ")}]`
     );
   }
 
@@ -159,6 +250,7 @@ export async function runIngest(): Promise<Summary> {
     totalRequests: 0,
     capped: false,
     droppedStale: 0,
+    crossSourceSkipped: 0,
     credits: {},
   };
 
@@ -180,21 +272,25 @@ export async function runIngest(): Promise<Summary> {
       inserted: 0,
       skippedDuplicates: 0,
       droppedStale: 0,
+      crossSourceSkipped: 0,
       errors: [],
     };
     summary.campaigns.push(campaignSummary);
 
-    // ---- credentials for all sources (campaign BYOK wins per service) ----
-    const [scCreds, edCreds, ndCreds, gnCreds] = await Promise.all([
-      resolveCredentials(campaign.id, "scrapecreators"),
-      resolveCredentials(campaign.id, "ensembledata"),
-      resolveCredentials(campaign.id, "newsdata"),
-      resolveCredentials(campaign.id, "gnews"),
+    // ---- credentials for the enabled sources (campaign BYOK wins per service).
+    //      A source excluded by `only` resolves no credentials and stays null,
+    //      so it runs no requests. ----
+    const keyFor = async (s: IngestSource): Promise<string | null> => {
+      if (!sourceEnabled(s)) return null;
+      const creds = await resolveCredentials(campaign.id, s);
+      return creds.credentials?.api_key ?? null;
+    };
+    const [scKey, edKey, ndKey, gnKey] = await Promise.all([
+      keyFor("scrapecreators"),
+      keyFor("ensembledata"),
+      keyFor("newsdata"),
+      keyFor("gnews"),
     ]);
-    const scKey = scCreds.credentials?.api_key ?? null;
-    const edKey = edCreds.credentials?.api_key ?? null;
-    const ndKey = ndCreds.credentials?.api_key ?? null;
-    const gnKey = gnCreds.credentials?.api_key ?? null;
     if (!scKey && !edKey && !ndKey && !gnKey) {
       console.log(`${LOG_PREFIX} skip ${campaign.slug}: no credentials`);
       campaignSummary.errors.push({
@@ -377,42 +473,111 @@ export async function runIngest(): Promise<Summary> {
       }
     }
 
-    // ---- News sweep: NewsData primary, GNews fallback (one OR query each) ----
-    // Dedupe is per (campaign_id, source, external_id), so running BOTH would
-    // double-cover the news beat under two sources. Rule: NewsData wins whenever
-    // it is keyed; GNews runs ONLY when NewsData is unkeyed but GNews is keyed.
+    // ---- News sweep: NewsData primary, GNews gap-filler (one OR query each) --
+    // When both are keyed, NewsData runs first (primary) and GNews runs after as
+    // a gap-filler that stores only stories NewsData didn't already capture —
+    // matched on a normalized URL/title against this run's NewsData rows AND the
+    // campaign's recent DB news. When only one is keyed, that one runs alone.
     const useNewsData = ndKey !== null;
-    const useGNews = !useNewsData && gnKey !== null;
+    const useGNews = gnKey !== null;
     if (capped.length > 0 && (useNewsData || useGNews)) {
-      const newsSource: IngestSource = useNewsData ? "newsdata" : "gnews";
-      console.log(
-        `${LOG_PREFIX} ${campaign.slug}: news sweep → ${newsSource}` +
-          (ndKey && gnKey ? " (both keyed; gnews idle to avoid dup news)" : "")
-      );
-      if (summary.totalRequests >= maxRequests) {
-        summary.capped = true;
-      } else {
-        summary.totalRequests += 1;
-        campaignSummary.requests += 1;
-        campaignSummary.requestsBySource[newsSource] += 1;
-        const country = newsCountry(campaign.country);
-        try {
-          if (ndKey) {
+      const country = newsCountry(campaign.country);
+      // Normalized keys of news already captured for THIS campaign, seeded from
+      // NewsData rows fetched this run and (for the GNews pass) the campaign's
+      // recent DB news. GNews rows matching any key are dropped as redundant.
+      const capturedNewsKeys = new Set<string>();
+
+      // --- NewsData (primary) ---
+      if (ndKey) {
+        if (summary.totalRequests >= maxRequests) {
+          summary.capped = true;
+        } else {
+          summary.totalRequests += 1;
+          campaignSummary.requests += 1;
+          campaignSummary.requestsBySource.newsdata += 1;
+          try {
             // NewsData returns a bare array; timeframe derived from fromIso.
-            await persist(await searchNews(ndKey, capped, country, fromIso));
-          } else if (gnKey) {
+            const ndRows = await searchNews(ndKey, capped, country, fromIso);
+            // Seed the dedupe set from every NewsData row fetched this run (even
+            // ones the recency gate later drops) so GNews won't re-add them.
+            for (const r of ndRows) addCapturedNewsKeys(capturedNewsKeys, r);
+            await persist(ndRows);
+          } catch (err) {
+            // A 429 out-of-credits is already isolated: the single batched call
+            // is NewsData's only news work for the campaign, nothing to abort.
+            recordError("newsdata", "news", "*", err);
+          }
+        }
+      }
+
+      // --- GNews (gap-filler) ---
+      if (gnKey) {
+        if (summary.totalRequests >= maxRequests) {
+          summary.capped = true;
+        } else {
+          // Seed the dedupe set with the campaign's recent DB news (url + title
+          // only) so the gap-filler also skips stories captured on prior runs,
+          // not just this run's NewsData insert. A query failure here is
+          // non-fatal — it just means weaker dedupe, so GNews still runs.
+          try {
+            const { data: recentNews, error: recentNewsError } = await admin
+              .from("mentions")
+              .select("url, title")
+              .eq("campaign_id", campaign.id)
+              .eq("media_type", "news")
+              .gte("captured_at", fromIso);
+            if (recentNewsError) {
+              console.log(
+                `${LOG_PREFIX} ${campaign.slug}: could not load recent news for dedupe — ${recentNewsError.message}`
+              );
+            } else {
+              for (const r of (recentNews ?? []) as {
+                url: string | null;
+                title: string | null;
+              }[]) {
+                addCapturedNewsKeys(capturedNewsKeys, r);
+              }
+            }
+          } catch (err) {
+            console.log(
+              `${LOG_PREFIX} ${campaign.slug}: could not load recent news for dedupe — ${errMessage(err)}`
+            );
+          }
+
+          summary.totalRequests += 1;
+          campaignSummary.requests += 1;
+          campaignSummary.requestsBySource.gnews += 1;
+          try {
             // GNews returns {rows, creditsRemaining}; from={ISO} for recency.
             const result = await searchGNews(gnKey, capped, country, fromIso);
             if (typeof result.creditsRemaining === "number") {
               summary.credits.gnews = result.creditsRemaining;
             }
-            await persist(result.rows);
+            // Keep only net-new stories: drop any GNews row whose normalized URL
+            // or title was already captured (this run's NewsData or recent DB
+            // news). Net-new rows are added to the set too, so identical stories
+            // within the same GNews batch collapse to one.
+            const netNew: NormalizedMentionInput[] = [];
+            let covered = 0;
+            for (const row of result.rows) {
+              if (isNewsAlreadyCaptured(capturedNewsKeys, row)) {
+                covered += 1;
+                continue;
+              }
+              addCapturedNewsKeys(capturedNewsKeys, row);
+              netNew.push(row);
+            }
+            campaignSummary.crossSourceSkipped += covered;
+            summary.crossSourceSkipped += covered;
+            console.log(
+              `${LOG_PREFIX} ${campaign.slug}: gnews: ${netNew.length} net-new, ${covered} already covered by newsdata`
+            );
+            await persist(netNew);
+          } catch (err) {
+            // A 429 out-of-credits is already isolated: the single batched call
+            // is GNews's only news work for the campaign, nothing to abort.
+            recordError("gnews", "news", "*", err);
           }
-        } catch (err) {
-          // A 429 out-of-credits (either source) is already isolated: the single
-          // batched call is this source's only news work for the campaign, so
-          // there is nothing further to abort.
-          recordError(newsSource, "news", "*", err);
         }
       }
     }
@@ -426,7 +591,7 @@ export async function runIngest(): Promise<Summary> {
   }
 
   console.log(
-    `${LOG_PREFIX} done: ${summary.campaigns.length} campaigns, ${summary.totalRequests} requests, capped=${summary.capped}, droppedStale=${summary.droppedStale}`
+    `${LOG_PREFIX} done: ${summary.campaigns.length} campaigns, ${summary.totalRequests} requests, capped=${summary.capped}, droppedStale=${summary.droppedStale}, crossSourceSkipped=${summary.crossSourceSkipped}`
   );
 
   // ---- record run metrics (§service_runs) ----

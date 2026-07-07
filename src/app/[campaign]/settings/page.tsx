@@ -12,11 +12,12 @@ import { useParams } from "next/navigation";
 import { useApp } from "@/lib/state";
 import type { KeywordKind } from "@/lib/data";
 import { useKeywordManager, type LiveKeyword } from "@/lib/data/keywords";
+import { useCampaignKeys } from "@/lib/data/campaignKeys";
 import { kindLabel } from "@/lib/campaignType";
 import { Switch } from "@/components/ds";
 import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
-import { SURVEY_TOOLS } from "@/lib/integrations";
+import { SURVEY_TOOLS, type IntegrationService } from "@/lib/integrations";
 import { useServiceUsage, WIRED_SOURCES, formatCompact, relTimeAgo } from "@/lib/data/serviceUsage";
 
 export default function SettingsPage() {
@@ -31,42 +32,36 @@ export default function SettingsPage() {
   // Live source health for the right-column card (wired ingest sources only).
   const usage = useServiceUsage();
 
+  // Live BYOK: the Client-integrations card reads + writes real
+  // `campaign_integrations` rows through this hook (RLS owner/operator only).
+  const ck = useCampaignKeys(campaign);
+
   // Which integration's inline key input is open (only one at a time) + its
-  // draft text. The saved keys live in the app context (state.byoKeys); this is
-  // purely the transient editing surface.
+  // draft text. Purely the transient editing surface; the saved keys live in the
+  // DB via useCampaignKeys.
   const [keyOpen, setKeyOpen] = React.useState<string | null>(null);
   const [keyDraft, setKeyDraft] = React.useState("");
 
-  const campaignKeys = state.byoKeys[campaign] ?? {};
-
-  const saveKey = (service: string, name: string) => {
+  const saveKey = async (service: IntegrationService, name: string) => {
     const val = keyDraft.trim();
     if (!val) return;
-    set((s) => ({
-      byoKeys: {
-        ...s.byoKeys,
-        [campaign]: { ...(s.byoKeys[campaign] ?? {}), [service]: val },
-      },
-    }));
+    // RLS denial (client_viewer) or a constraint rejection surfaces as err here.
+    const err = await ck.save(service, val);
+    if (err) return notify(err);
     setKeyOpen(null);
     setKeyDraft("");
-    notify(`Client key saved for ${name} — used instead of the platform key on the next run`);
+    notify(`Client key saved for ${name} — used before the platform key on the next run`);
   };
 
-  const removeKey = (service: string, name: string) => {
-    set((s) => {
-      const next = { ...(s.byoKeys[campaign] ?? {}) };
-      delete next[service];
-      return { byoKeys: { ...s.byoKeys, [campaign]: next } };
-    });
+  const removeKey = async (service: IntegrationService, name: string) => {
+    const err = await ck.remove(service);
+    if (err) return notify(err);
     if (keyOpen === service) {
       setKeyOpen(null);
       setKeyDraft("");
     }
     notify(`Client key removed — ${name} falls back to the platform key`);
   };
-
-  const maskKey = (v: string) => "••••" + v.slice(-4);
 
   // Live keyword mutations. Each surfaces the manager's error string via a
   // toast (RLS denials land here for client_viewers), or a short confirmation on
@@ -337,7 +332,8 @@ export default function SettingsPage() {
             </span>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {SURVEY_TOOLS.map((tool) => {
-                const stored = campaignKeys[tool.id];
+                const hint = ck.keys[tool.id];
+                const stored = !!hint?.hasKey;
                 const open = keyOpen === tool.id;
                 return (
                   <div
@@ -382,10 +378,10 @@ export default function SettingsPage() {
                               color: "var(--text-tertiary)",
                             }}
                           >
-                            {maskKey(stored)}
+                            {hint?.masked}
                           </span>
                           <button
-                            onClick={() => removeKey(tool.id, tool.name)}
+                            onClick={() => void removeKey(tool.id, tool.name)}
                             style={{
                               flex: "none",
                               border: "none",
@@ -432,7 +428,7 @@ export default function SettingsPage() {
                           value={keyDraft}
                           onChange={(e) => setKeyDraft(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") saveKey(tool.id, tool.name);
+                            if (e.key === "Enter") void saveKey(tool.id, tool.name);
                             if (e.key === "Escape") {
                               setKeyOpen(null);
                               setKeyDraft("");
@@ -454,7 +450,7 @@ export default function SettingsPage() {
                           }}
                         />
                         <button
-                          onClick={() => saveKey(tool.id, tool.name)}
+                          onClick={() => void saveKey(tool.id, tool.name)}
                           style={{
                             height: 28,
                             padding: "0 12px",

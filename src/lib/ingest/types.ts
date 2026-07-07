@@ -8,10 +8,10 @@
  *
  * Sources: ScrapeCreators (social keyword search), EnsembleData (TikTok keyword
  * search — takes over TikTok when a campaign keys it), NewsData (news keyword
- * search, primary for news), and GNews (news fallback — runs only when a
- * campaign lacks a NewsData key). Dedupe is per (campaign_id, source,
- * external_id), so the runner routes each platform to exactly one source to
- * avoid duplicate rows.
+ * search, primary for news), and GNews (news gap-filler — runs alongside
+ * NewsData but stores only stories NewsData didn't capture). Dedupe is per
+ * (campaign_id, source, external_id), so the runner routes each platform to
+ * exactly one source to avoid duplicate rows.
  */
 
 /** JSON-serialisable value, mirroring Supabase's jsonb column contract. */
@@ -33,15 +33,19 @@ export type IngestPlatform =
 
 /**
  * Every source that can write `mentions` rows through the ingest runner.
- * NewsData is the primary news source; GNews is its fallback (used only when a
- * campaign has no NewsData key but does have a GNews key), so the two never
- * write duplicate news rows under different sources.
+ * NewsData is the primary news source; GNews runs alongside it as a GAP-FILLER
+ * (when both are keyed, GNews contributes only stories NewsData didn't already
+ * capture), so the two never write duplicate news rows under different sources.
+ * When only one is keyed, that one runs on its own.
  */
-export type IngestSource =
-  | "scrapecreators"
-  | "ensembledata"
-  | "newsdata"
-  | "gnews";
+export const INGEST_SOURCES = [
+  "scrapecreators",
+  "ensembledata",
+  "newsdata",
+  "gnews",
+] as const;
+
+export type IngestSource = (typeof INGEST_SOURCES)[number];
 
 /**
  * Platforms a normalized row can carry: the social sweep platforms plus "news"
@@ -105,6 +109,16 @@ export interface CampaignSummary {
    * they are kept). Dropped before persist, so they never reach `mentions`.
    */
   droppedStale: number;
+  /**
+   * News rows GNews returned this campaign that were dropped BEFORE persist
+   * because another source already captured the same story — matched on a
+   * normalized URL or title against (a) NewsData rows inserted this run and
+   * (b) existing recent `mentions` news rows. Distinct from skippedDuplicates
+   * (a DB-level, post-persist count on the unique index): crossSourceSkipped is
+   * an application-level pre-persist gap-filler count, so GNews contributes only
+   * net-new stories.
+   */
+  crossSourceSkipped: number;
   errors: IngestError[];
 }
 
@@ -120,6 +134,13 @@ export interface Summary {
    * visible in the run summary/detail.
    */
   droppedStale: number;
+  /**
+   * Total GNews rows dropped by the cross-source gap-filler across every
+   * campaign this run (sum of each CampaignSummary.crossSourceSkipped) — stories
+   * NewsData (this run or in the recent DB window) already covered. Surfaced so
+   * gap-filler overlap volume is visible in the run summary/detail.
+   */
+  crossSourceSkipped: number;
   /**
    * Most-recent credit/unit balance seen per source this run, keyed by source
    * name (e.g. { scrapecreators: 8421 }). Only sources whose API responses
