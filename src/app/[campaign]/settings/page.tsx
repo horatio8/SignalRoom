@@ -285,39 +285,36 @@ export default function SettingsPage() {
               <span style={{ fontSize: 16, fontWeight: 600 }}>Source health</span>
               <span style={{ ...monoMeta, marginLeft: "auto" }}>ingest {relTimeAgo(usage.latestByKind.ingest?.created_at)}</span>
             </div>
-            {!usage.live ? (
-              <span style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-tertiary)" }}>
-                No runs yet — health appears after the first ingest sweep.
+            {/* The wired sources are static knowledge — always listed, with an
+                idle dot and "—" requests until the first ingest sweep lands. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {WIRED_SOURCES.map((id) => {
+                const src = usage.perSource[id];
+                const tool = SURVEY_TOOLS.find((t) => t.id === id);
+                const hasIngest = !!usage.latestByKind.ingest;
+                // idle = no ingest runs; degraded = a recent error; else healthy.
+                const dot = !hasIngest
+                  ? "var(--text-tertiary)"
+                  : src.lastError
+                    ? "var(--warn)"
+                    : "var(--pos)";
+                return (
+                  <div key={id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flex: "none" }} />
+                    <span style={{ fontSize: 12.5, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                      {tool?.name ?? id}
+                    </span>
+                    <span style={{ ...monoMeta }}>{relTimeAgo(usage.latestByKind.ingest?.created_at)}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-secondary)", width: 52, textAlign: "right" }}>
+                      {hasIngest ? formatCompact(src.requestsToday) : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+              <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>
+                requests today · full usage on the Admin screen
               </span>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {WIRED_SOURCES.map((id) => {
-                  const src = usage.perSource[id];
-                  const tool = SURVEY_TOOLS.find((t) => t.id === id);
-                  // idle = no ingest runs; degraded = a recent error; else healthy.
-                  const dot = !usage.latestByKind.ingest
-                    ? "var(--text-tertiary)"
-                    : src.lastError
-                      ? "var(--warn)"
-                      : "var(--pos)";
-                  return (
-                    <div key={id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flex: "none" }} />
-                      <span style={{ fontSize: 12.5, fontWeight: 500, flex: 1, minWidth: 0 }}>
-                        {tool?.name ?? id}
-                      </span>
-                      <span style={{ ...monoMeta }}>{relTimeAgo(usage.latestByKind.ingest?.created_at)}</span>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-secondary)", width: 52, textAlign: "right" }}>
-                        {formatCompact(src.requestsToday)}
-                      </span>
-                    </div>
-                  );
-                })}
-                <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>
-                  requests today · full usage on the Admin screen
-                </span>
-              </div>
-            )}
+            </div>
           </div>
 
           {/* Delivery — not wired to live data yet */}
