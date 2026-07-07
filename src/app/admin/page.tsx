@@ -15,7 +15,6 @@
 import React from "react";
 import { AppShell } from "@/components/app/AppShell";
 import { useApp } from "@/lib/state";
-import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, monoMeta, overline } from "@/lib/ui";
 import { SURVEY_TOOLS } from "@/lib/integrations";
 import {
@@ -45,7 +44,7 @@ const HEALTH_DOT: Record<Health, string> = {
 const HEALTH_LABEL: Record<Health, string> = {
   healthy: "healthy",
   degraded: "degraded",
-  idle: "idle",
+  idle: "idle — no runs yet",
 };
 
 /** Human label for a run kind in the log list. */
@@ -89,15 +88,14 @@ export default function AdminPage() {
           <span style={monoMeta}>service usage · all campaigns</span>
         </div>
 
-        {!usage.live ? (
-          // No rows yet — a single honest waiting state (RLS-open read returned empty).
-          <div style={{ ...cardSurface }}>
-            <EmptyState
-              title="No runs yet"
-              note="Usage appears here after the first ingest, enrichment, or sync run."
-            />
-          </div>
-        ) : (
+        {!usage.live && (
+          // Non-blocking note only — the wired services are static knowledge and
+          // always render below (idle status) so the operator sees them pre-run.
+          <span style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-tertiary)" }}>
+            No runs recorded yet — usage appears after the next ingest, enrichment, or sync.
+          </span>
+        )}
+        {
           <>
             {/* ============ SEARCH SERVICES ============ */}
             <div style={{ ...cardSurface, overflow: "hidden" }}>
@@ -165,7 +163,8 @@ export default function AdminPage() {
                         <span style={{ ...monoMeta, fontSize: 10.5 }}>{tool.desc}</span>
                       </div>
                       <div style={{ display: "flex", gap: 20, flex: "none" }}>
-                        <Stat label="Requests today" value={formatCompact(src.requestsToday)} />
+                        {/* Pre-run: "—" rather than a misleading 0 across the board. */}
+                        <Stat label="Requests today" value={hasIngest ? formatCompact(src.requestsToday) : "—"} />
                         <Stat label="Rows today" value={src.rowsToday == null ? "—" : formatCompact(src.rowsToday)} />
                         <Stat
                           label="Credits left"
@@ -203,11 +202,12 @@ export default function AdminPage() {
                   <span style={{ ...monoMeta, marginLeft: "auto" }}>{relTimeAgo(latestEnrich?.created_at)}</span>
                 </div>
                 <div style={{ display: "flex", gap: 24 }}>
-                  <Stat label="Enriched today" value={formatCompact(enrichAgg.processed)} />
-                  <Stat label="Tokens today" value={formatCompact(enrichAgg.tokens)} />
+                  {/* "—" until the first enrichment run, then today's aggregates. */}
+                  <Stat label="Enriched today" value={latestEnrich ? formatCompact(enrichAgg.processed) : "—"} />
+                  <Stat label="Tokens today" value={latestEnrich ? formatCompact(enrichAgg.tokens) : "—"} />
                   <Stat
                     label="Failures today"
-                    value={formatCompact(enrichAgg.errors)}
+                    value={latestEnrich ? formatCompact(enrichAgg.errors) : "—"}
                     tone={enrichAgg.errors > 0 ? "var(--neg-text)" : undefined}
                   />
                 </div>
@@ -220,10 +220,11 @@ export default function AdminPage() {
                   <span style={{ ...monoMeta, marginLeft: "auto" }}>{relTimeAgo(latestSync?.created_at)}</span>
                 </div>
                 <div style={{ display: "flex", gap: 24 }}>
-                  <Stat label="Synced today" value={formatCompact(syncAgg.processed)} />
+                  {/* "—" until the first sync run, then today's aggregates. */}
+                  <Stat label="Synced today" value={latestSync ? formatCompact(syncAgg.processed) : "—"} />
                   <Stat
                     label="Errors today"
-                    value={formatCompact(syncAgg.errors)}
+                    value={latestSync ? formatCompact(syncAgg.errors) : "—"}
                     tone={syncAgg.errors > 0 ? "var(--neg-text)" : undefined}
                   />
                 </div>
@@ -307,9 +308,14 @@ export default function AdminPage() {
                   </span>
                 </div>
               ))}
+              {usage.recentRuns.length === 0 && (
+                <div style={{ padding: "12px 16px", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-tertiary)" }}>
+                  no runs yet
+                </div>
+              )}
             </div>
           </>
-        )}
+        }
       </div>
     </AppShell>
   );
