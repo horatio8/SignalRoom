@@ -213,6 +213,33 @@ export async function syncAirtable(): Promise<SyncSummary> {
   const tableId = process.env.AIRTABLE_TABLE_ID || DEFAULT_TABLE_ID;
   const maxRecords = resolveMaxRecords();
 
+  // Record one usage/cost row so the UI can show real service usage. Isolated in
+  // its own try/catch: a metrics-write failure must never fail the sync run. Only
+  // called once the run actually does work — the earlier skipped-return paths
+  // (no admin client, no token) never ran and so are not recorded.
+  const persistRun = async (): Promise<void> => {
+    try {
+      const { error: metricsError } = await admin
+        .from("service_runs")
+        .insert({
+          kind: "sync_airtable",
+          requests: summary.chunks,
+          processed: summary.synced,
+          errors: summary.errors.length,
+          tokens: null,
+          detail: summary,
+        });
+      if (metricsError) {
+        console.log(
+          `${LOG_PREFIX} failed to record service_runs row: ${metricsError.message}`
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`${LOG_PREFIX} failed to record service_runs row: ${message}`);
+    }
+  };
+
   // Rows needing sync: not yet mirrored, and either terminal (enriched or failed)
   // or past the 2h safety window. Oldest first, capped to bound time + rate cost.
   const safetyCutoff = new Date(Date.now() - SAFETY_WINDOW_MS).toISOString();
@@ -236,6 +263,7 @@ export async function syncAirtable(): Promise<SyncSummary> {
   summary.scanned = rows.length;
   if (rows.length === 0) {
     console.log(`${LOG_PREFIX} nothing to mirror`);
+    await persistRun();
     return summary;
   }
 
@@ -285,5 +313,6 @@ export async function syncAirtable(): Promise<SyncSummary> {
   console.log(
     `${LOG_PREFIX} done: scanned=${summary.scanned} synced=${summary.synced} failed=${summary.failed} chunks=${summary.chunks}`
   );
+  await persistRun();
   return summary;
 }

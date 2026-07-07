@@ -159,15 +159,29 @@ function normalizeTikTok(body: Record<string, unknown>): NormalizedMentionInput[
 }
 
 /**
+ * Result of one TikTok search: the normalized rows plus, when the response
+ * carries it, the account's remaining unit balance. EnsembleData reports
+ * `units_charged` (the cost of THIS call) on every response; a remaining
+ * balance is plan-dependent and often absent, so `creditsRemaining` stays
+ * undefined unless the response actually exposes it.
+ */
+export interface TikTokSearchResult {
+  rows: NormalizedMentionInput[];
+  /** Remaining unit balance, when the response reports one. */
+  creditsRemaining?: number;
+}
+
+/**
  * Search TikTok for one keyword and return normalized mentions (without
- * campaign_id). period "1" = last day, sorting "2" = most recent, single page.
- * Throws EnsembleDataError on non-200. De-duped by aweme_id here (the DB unique
- * index is the durable cross-run dedupe).
+ * campaign_id) plus any remaining unit balance. period "1" = last day,
+ * sorting "2" = most recent, single page. Throws EnsembleDataError on non-200.
+ * De-duped by aweme_id here (the DB unique index is the durable cross-run
+ * dedupe).
  */
 export async function searchTikTok(
   token: string,
   keyword: string
-): Promise<NormalizedMentionInput[]> {
+): Promise<TikTokSearchResult> {
   const body = await edGet(token, "/tt/keyword/search", {
     name: keyword,
     period: "1",
@@ -183,5 +197,13 @@ export async function searchTikTok(
     seen.add(row.external_id);
     deduped.push(row);
   }
-  return deduped;
+
+  // Surface a remaining unit balance only when the response exposes one — this
+  // is distinct from units_charged (the cost of this call), which edGet logs.
+  const remaining =
+    asNum(body["units_remaining"]) ??
+    asNum(body["remaining_units"]) ??
+    asNum(body["balance"]);
+  const creditsRemaining = remaining === null ? undefined : remaining;
+  return { rows: deduped, creditsRemaining };
 }

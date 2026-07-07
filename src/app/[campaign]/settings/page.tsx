@@ -17,6 +17,7 @@ import { Switch } from "@/components/ds";
 import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, kindTone, monoMeta, overline } from "@/lib/ui";
 import { SURVEY_TOOLS } from "@/lib/integrations";
+import { useServiceUsage, WIRED_SOURCES, formatCompact, relTimeAgo } from "@/lib/data/serviceUsage";
 
 export default function SettingsPage() {
   const { campaign } = useParams<{ campaign: string }>();
@@ -26,6 +27,9 @@ export default function SettingsPage() {
   // manager (RLS-scoped read + owner/operator writes).
   const km = useKeywordManager(campaign);
   const [kwKind, setKwKind] = React.useState<KeywordKind>("issue");
+
+  // Live source health for the right-column card (wired ingest sources only).
+  const usage = useServiceUsage();
 
   // Which integration's inline key input is open (only one at a time) + its
   // draft text. The saved keys live in the app context (state.byoKeys); this is
@@ -274,12 +278,46 @@ export default function SettingsPage() {
 
         {/* Right column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Source health — awaiting live ingest metrics */}
+          {/* Source health — compact live view of the wired ingest sources.
+              Full usage (rows, credits, spend) lives on the Admin screen. */}
           <div style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>Source health</span>
-            <span style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-tertiary)" }}>
-              Live source health — coming with ingest metrics.
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>Source health</span>
+              <span style={{ ...monoMeta, marginLeft: "auto" }}>ingest {relTimeAgo(usage.latestByKind.ingest?.created_at)}</span>
+            </div>
+            {!usage.live ? (
+              <span style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-tertiary)" }}>
+                No runs yet — health appears after the first ingest sweep.
+              </span>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {WIRED_SOURCES.map((id) => {
+                  const src = usage.perSource[id];
+                  const tool = SURVEY_TOOLS.find((t) => t.id === id);
+                  // idle = no ingest runs; degraded = a recent error; else healthy.
+                  const dot = !usage.latestByKind.ingest
+                    ? "var(--text-tertiary)"
+                    : src.lastError
+                      ? "var(--warn)"
+                      : "var(--pos)";
+                  return (
+                    <div key={id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot, flex: "none" }} />
+                      <span style={{ fontSize: 12.5, fontWeight: 500, flex: 1, minWidth: 0 }}>
+                        {tool?.name ?? id}
+                      </span>
+                      <span style={{ ...monoMeta }}>{relTimeAgo(usage.latestByKind.ingest?.created_at)}</span>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-secondary)", width: 52, textAlign: "right" }}>
+                        {formatCompact(src.requestsToday)}
+                      </span>
+                    </div>
+                  );
+                })}
+                <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>
+                  requests today · full usage on the Admin screen
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Delivery — not wired to live data yet */}
