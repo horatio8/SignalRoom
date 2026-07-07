@@ -52,23 +52,71 @@ const selectStyle: React.CSSProperties = {
 
 function OnboardingScreen() {
   const router = useRouter();
-  const { state, set } = useApp();
+  const { state, set, notify } = useApp();
   const { obStep, obPlan, obSrcOff } = state;
 
-  // Local (mock) wizard choices. Campaign type drives the Keywords step labels;
-  // country seeds the timezone default. Not persisted — this is the mock flow.
+  // Wizard choices held in local state until the final step persists them.
+  // Campaign type drives the Keywords step labels; country seeds the timezone
+  // default. The Basics name and the Keywords terms feed the create call.
+  const [obName, setObName] = React.useState<string>("");
   const [obType, setObType] = React.useState<CampaignType>("candidate");
   const [obCountry, setObCountry] = React.useState<"US" | "AU">("US");
   const [obTz, setObTz] = React.useState<string>(DEFAULT_TIMEZONE_BY_COUNTRY.US);
+  const [obSubject, setObSubject] = React.useState<string>("Elena Ríos");
+  const [obOpponents, setObOpponents] = React.useState<string>("Dan Whitfield");
+  const [obIssues, setObIssues] = React.useState<string>("housing, transit, cost of living");
+  const [submitting, setSubmitting] = React.useState(false);
   const isIssue = obType === "issue";
 
   // Home ("/") resolves to the user's first live campaign when there is no
   // current slug yet (e.g. onboarding a brand-new account).
   const homeHref = state.campaign ? `/${state.campaign}/overview` : "/";
+
+  // Final step: turn the collected state into a real campaign, seed its
+  // keywords, make the signed-in user its owner, then route into it. The route
+  // authenticates from the session and owns the RLS-bypassing writes.
+  const create = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    // Map the wizard's terms to valid keywords.kind values: our subject →
+    // 'candidate' (the cause, in issue mode), opposition → 'opponent', each
+    // comma-separated issue → 'issue'. Blank terms are dropped.
+    const split = (raw: string) =>
+      raw.split(",").map((t) => t.trim()).filter(Boolean);
+    const keywords = [
+      ...(obSubject.trim() ? [{ term: obSubject.trim(), kind: "candidate" }] : []),
+      ...split(obOpponents).map((term) => ({ term, kind: "opponent" })),
+      ...split(obIssues).map((term) => ({ term, kind: "issue" })),
+    ];
+    try {
+      const res = await fetch("/api/onboarding/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: obName.trim(),
+          country: obCountry,
+          timezone: obTz,
+          campaignType: obType,
+          keywords,
+        }),
+      });
+      const json = (await res.json()) as { slug?: string; error?: string };
+      if (!res.ok || !json.slug) {
+        notify(json.error ?? "Could not create the campaign.");
+        setSubmitting(false);
+        return;
+      }
+      set({ obStep: 0 });
+      router.push(`/${json.slug}/overview`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not create the campaign.");
+      setSubmitting(false);
+    }
+  };
+
   const next = () => {
     if (obStep === 4) {
-      set({ obStep: 0 });
-      router.push(homeHref);
+      void create();
     } else {
       set({ obStep: obStep + 1 });
     }
@@ -148,7 +196,12 @@ function OnboardingScreen() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 6, gridColumn: "1 / -1" }}>
                 <span style={overline}>Campaign name</span>
-                <input placeholder="Ríos for Congress" style={inputStyle} />
+                <input
+                  placeholder="Ríos for Congress"
+                  style={inputStyle}
+                  value={obName}
+                  onChange={(e) => setObName(e.target.value)}
+                />
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={overline}>Country</span>
@@ -258,7 +311,11 @@ function OnboardingScreen() {
             </div>
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <span style={overline}>{isIssue ? "Campaign / cause" : "Candidate"}</span>
-              <input defaultValue="Elena Ríos" style={inputStyle} />
+              <input
+                style={inputStyle}
+                value={obSubject}
+                onChange={(e) => setObSubject(e.target.value)}
+              />
             </label>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <span style={overline}>Misspellings · auto-suggested</span>
@@ -316,11 +373,19 @@ function OnboardingScreen() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={overline}>{isIssue ? "Opposition" : "Opponents"}</span>
-                <input defaultValue="Dan Whitfield" style={inputStyle} />
+                <input
+                  style={inputStyle}
+                  value={obOpponents}
+                  onChange={(e) => setObOpponents(e.target.value)}
+                />
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={overline}>Issues</span>
-                <input defaultValue="housing, transit, cost of living" style={inputStyle} />
+                <input
+                  style={inputStyle}
+                  value={obIssues}
+                  onChange={(e) => setObIssues(e.target.value)}
+                />
               </label>
             </div>
             <div
@@ -453,6 +518,7 @@ function OnboardingScreen() {
           </button>
           <button
             onClick={next}
+            disabled={submitting}
             style={{
               marginLeft: "auto",
               height: 34,
@@ -464,10 +530,17 @@ function OnboardingScreen() {
               fontFamily: "var(--font-ui)",
               fontSize: 13,
               fontWeight: 500,
-              cursor: "pointer",
+              cursor: submitting ? "default" : "pointer",
+              opacity: submitting ? 0.6 : 1,
             }}
           >
-            {obStep === 3 ? "Go live →" : obStep === 4 ? "Open dashboard" : "Continue"}
+            {obStep === 3
+              ? "Go live →"
+              : obStep === 4
+                ? submitting
+                  ? "Creating…"
+                  : "Open dashboard"
+                : "Continue"}
           </button>
         </div>
       </div>
