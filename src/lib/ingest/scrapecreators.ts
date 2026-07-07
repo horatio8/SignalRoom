@@ -309,16 +309,28 @@ const PLATFORMS: Record<
 };
 
 /**
+ * Result of one platform search: the normalized rows plus, when the response
+ * reports it, the account's remaining ScrapeCreators credit balance so the
+ * ingest runner can surface real service usage.
+ */
+export interface PlatformSearchResult {
+  rows: NormalizedMentionInput[];
+  /** `credits_remaining` from the response, when present. */
+  creditsRemaining?: number;
+}
+
+/**
  * Search one platform for one keyword and return normalized mentions (without
- * campaign_id). Single page, one credit. Throws ScrapeCreatorsError on non-200;
- * TikTok is de-duped by aweme_id here since the docs warn of intra-response
- * duplicates (the DB unique index is the durable dedupe across runs).
+ * campaign_id) plus the latest `credits_remaining` balance. Single page, one
+ * credit. Throws ScrapeCreatorsError on non-200; TikTok is de-duped by aweme_id
+ * here since the docs warn of intra-response duplicates (the DB unique index is
+ * the durable dedupe across runs).
  */
 export async function searchPlatform(
   apiKey: string,
   platform: IngestPlatform,
   keyword: string
-): Promise<NormalizedMentionInput[]> {
+): Promise<PlatformSearchResult> {
   const cfg = PLATFORMS[platform];
   const body = await scGet(apiKey, cfg.path, cfg.params(keyword));
   const rows = cfg.normalize(body);
@@ -331,5 +343,9 @@ export async function searchPlatform(
     seen.add(row.external_id);
     deduped.push(row);
   }
-  return deduped;
+
+  // Surface the remaining credit balance so the runner can record it.
+  const credits = body["credits_remaining"];
+  const creditsRemaining = typeof credits === "number" ? credits : undefined;
+  return { rows: deduped, creditsRemaining };
 }

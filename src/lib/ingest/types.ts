@@ -95,4 +95,12 @@ export interface Summary {
   campaigns: CampaignSummary[];
   totalRequests: number;
   capped: boolean; // true when INGEST_MAX_REQUESTS stopped the run early
+  /**
+   * Most-recent credit/unit balance seen per source this run, keyed by source
+   * name (e.g. { scrapecreators: 8421 }). Only sources whose API responses
+   * report a remaining balance appear — ScrapeCreators always does, EnsembleData
+   * when its plan reports remaining units, and NewsData never (no per-call
+   * balance), so NewsData is omitted.
+   */
+  credits: Record<string, number>;
 }

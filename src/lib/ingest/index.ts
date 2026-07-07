@@ -130,7 +130,12 @@ export async function runIngest(): Promise<Summary> {
     throw new Error(`ingest: failed to load campaigns — ${campaignsError.message}`);
   }
 
-  const summary: Summary = { campaigns: [], totalRequests: 0, capped: false };
+  const summary: Summary = {
+    campaigns: [],
+    totalRequests: 0,
+    capped: false,
+    credits: {},
+  };
 
   for (const campaign of (campaigns ?? []) as CampaignRow[]) {
     if (summary.totalRequests >= maxRequests) {
@@ -268,7 +273,13 @@ export async function runIngest(): Promise<Summary> {
           campaignSummary.requests += 1;
           campaignSummary.requestsBySource.scrapecreators += 1;
           try {
-            await persist(await searchPlatform(scKey, platform, keyword));
+            // Capture the credit balance before persisting so a downstream
+            // insert error can't lose the just-observed usage reading.
+            const result = await searchPlatform(scKey, platform, keyword);
+            if (typeof result.creditsRemaining === "number") {
+              summary.credits.scrapecreators = result.creditsRemaining;
+            }
+            await persist(result.rows);
           } catch (err) {
             if (recordError("scrapecreators", platform, keyword, err)) {
               console.log(
@@ -299,7 +310,11 @@ export async function runIngest(): Promise<Summary> {
         campaignSummary.requests += 1;
         campaignSummary.requestsBySource.ensembledata += 1;
         try {
-          await persist(await searchTikTok(edKey, keyword));
+          const result = await searchTikTok(edKey, keyword);
+          if (typeof result.creditsRemaining === "number") {
+            summary.credits.ensembledata = result.creditsRemaining;
+          }
+          await persist(result.rows);
         } catch (err) {
           if (recordError("ensembledata", "tiktok", keyword, err)) {
             console.log(
@@ -337,5 +352,32 @@ export async function runIngest(): Promise<Summary> {
   console.log(
     `${LOG_PREFIX} done: ${summary.campaigns.length} campaigns, ${summary.totalRequests} requests, capped=${summary.capped}`
   );
+
+  // ---- record run metrics (§service_runs) ----
+  // Persist one usage/cost row so the UI can show real service usage. This is
+  // isolated in its own try/catch: a metrics-write failure must never fail or
+  // break the ingest run itself, which has already done its real work.
+  const processed = summary.campaigns.reduce((n, c) => n + c.inserted, 0);
+  const errorCount = summary.campaigns.reduce((n, c) => n + c.errors.length, 0);
+  try {
+    const { error: metricsError } = await admin.from("service_runs").insert({
+      kind: "ingest",
+      requests: summary.totalRequests,
+      processed,
+      errors: errorCount,
+      tokens: null,
+      detail: summary,
+    });
+    if (metricsError) {
+      console.log(
+        `${LOG_PREFIX} failed to record service_runs row: ${metricsError.message}`
+      );
+    }
+  } catch (err) {
+    console.log(
+      `${LOG_PREFIX} failed to record service_runs row: ${errMessage(err)}`
+    );
+  }
+
   return summary;
 }

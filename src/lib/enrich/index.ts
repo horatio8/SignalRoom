@@ -102,6 +102,10 @@ export interface EnrichSummary {
   clustersCreated: number;
   byCampaign: CampaignSummary[];
   errors: string[];
+  /** Anthropic Messages API calls made this run (one per chunk of MODEL_BATCH). */
+  modelCalls: number;
+  /** Anthropic input+output tokens summed across every model call this run. */
+  tokens: number;
 }
 
 /**
@@ -129,6 +133,34 @@ export async function runEnrichment(batch = DEFAULT_BATCH): Promise<EnrichSummar
     clustersCreated: 0,
     byCampaign: [],
     errors: [],
+    modelCalls: 0,
+    tokens: 0,
+  };
+
+  // Record one usage/cost row so the UI can show real service usage. Isolated in
+  // its own try/catch: a metrics-write failure must never fail the enrich run.
+  // Called before every return so even a no-op run is recorded.
+  const persistRun = async (): Promise<void> => {
+    try {
+      const { error: metricsError } = await admin
+        .from("service_runs")
+        .insert({
+          kind: "enrich",
+          requests: summary.modelCalls,
+          processed: summary.enriched,
+          errors: summary.failed,
+          tokens: summary.tokens,
+          detail: summary,
+        });
+      if (metricsError) {
+        console.log(
+          `[enrich] failed to record service_runs row: ${metricsError.message}`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`[enrich] failed to record service_runs row: ${msg}`);
+    }
   };
 
   // 1) Oldest un-enriched, un-failed mentions across ALL campaigns.
@@ -147,7 +179,10 @@ export async function runEnrichment(batch = DEFAULT_BATCH): Promise<EnrichSummar
   }
   const rows = (mentions ?? []) as MentionRow[];
   summary.scanned = rows.length;
-  if (rows.length === 0) return summary;
+  if (rows.length === 0) {
+    await persistRun();
+    return summary;
+  }
 
   // 2) Group by campaign — context is loaded once per campaign.
   const byCampaign = new Map<string, MentionRow[]>();
@@ -194,6 +229,7 @@ export async function runEnrichment(batch = DEFAULT_BATCH): Promise<EnrichSummar
     summary.byCampaign.push(perCampaign);
   }
 
+  await persistRun();
   return summary;
 }
 
@@ -298,6 +334,9 @@ async function processChunk(
 
   let results: Map<number, MentionEnrichment>;
   try {
+    // Count the call before awaiting: an attempted call is a call made, so the
+    // metrics `requests` reflects every batch we hit the model with.
+    summary.modelCalls += 1;
     const message = await anthropic.messages.create({
       model,
       max_tokens: 8000,
@@ -307,6 +346,8 @@ async function processChunk(
       tool_choice: { type: "tool", name: "emit_enrichments" },
       messages: [{ role: "user", content: buildUserContent(inputs) }],
     });
+    // Accumulate Anthropic token spend (input + output) for the usage metrics.
+    summary.tokens += message.usage.input_tokens + message.usage.output_tokens;
     const toolBlock = message.content.find((b) => b.type === "tool_use");
     if (!toolBlock || toolBlock.type !== "tool_use") {
       throw new Error("model did not return an emit_enrichments tool call");
