@@ -28,11 +28,11 @@ export type RunKind = "ingest" | "enrich" | "sync_airtable";
 
 /**
  * Search services that actually have ingest adapters (static knowledge). The
- * other catalog tools (kwatch, gnews, apify, meta_ad_library, firecrawl,
- * podcastindex) are not wired and never appear in ingest detail. Display names
- * come from SURVEY_TOOLS (src/lib/integrations.ts); this is just the wired set.
+ * other catalog tools (kwatch, apify, meta_ad_library, firecrawl, podcastindex)
+ * are not wired and never appear in ingest detail. Display names come from
+ * SURVEY_TOOLS (src/lib/integrations.ts); this is just the wired set.
  */
-export const WIRED_SOURCES = ["scrapecreators", "ensembledata", "newsdata"] as const;
+export const WIRED_SOURCES = ["scrapecreators", "ensembledata", "newsdata", "gnews"] as const;
 export type WiredSource = (typeof WIRED_SOURCES)[number];
 
 /** The columns we select from `service_runs`. `detail` is opaque jsonb. */
@@ -133,11 +133,9 @@ function emptyUsage(): ServiceUsage {
     live: false,
     latestByKind: {},
     todayByKind: { ingest: zeroAggregate(), enrich: zeroAggregate(), sync_airtable: zeroAggregate() },
-    perSource: {
-      scrapecreators: emptySource("scrapecreators"),
-      ensembledata: emptySource("ensembledata"),
-      newsdata: emptySource("newsdata"),
-    },
+    perSource: Object.fromEntries(
+      WIRED_SOURCES.map((s) => [s, emptySource(s)])
+    ) as Record<WiredSource, SourceUsage>,
     recentRuns: [],
     airtableNoop: false,
   };
@@ -196,11 +194,9 @@ function buildUsage(rows: ServiceRunRow[]): ServiceUsage {
   // perSource requests + rows today, summed across today's ingest rows'
   // per-campaign breakdown. rowsBySource/insertedBySource are read defensively:
   // if the shape carries no per-source row count, rowsToday stays null → "—".
-  const rowsSeen: Record<WiredSource, boolean> = {
-    scrapecreators: false,
-    ensembledata: false,
-    newsdata: false,
-  };
+  const rowsSeen = Object.fromEntries(
+    WIRED_SOURCES.map((s) => [s, false])
+  ) as Record<WiredSource, boolean>;
   for (const r of rows) {
     if (r.kind !== "ingest" || ts(r.created_at) < midnightMs) continue;
     const detail = asRecord(r.detail);
