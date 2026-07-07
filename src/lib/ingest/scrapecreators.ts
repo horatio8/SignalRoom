@@ -66,6 +66,14 @@ async function scGet(
   }
 
   if (!res.ok) {
+    // A 404 from a search endpoint means "no results for this query" — common on
+    // the Google-indexed Instagram/LinkedIn endpoints when a keyword simply has
+    // no matches. Treat it as an empty result set rather than a hard failure, so
+    // a no-match keyword isn't reported as an error.
+    if (res.status === 404) {
+      console.log(`${LOG_PREFIX} no results (404) for ${path}`);
+      return {};
+    }
     // Map the documented error codes to readable messages; 402 is distinct.
     const detail =
       res.status === 402

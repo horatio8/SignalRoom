@@ -25,9 +25,6 @@ const SEARCH_PATH = "/api/1/latest";
 const REQUEST_TIMEOUT_MS = 25_000;
 const MAX_Q_ENCODED = 512; // q ≤ 512 chars once URL-encoded
 const PAGE_SIZE = "10";
-// NewsData's `timeframe` (latest endpoint) accepts whole hours up to 48; a
-// wider recency window is clamped to this so the API never rejects it.
-const MAX_TIMEFRAME_HOURS = 48;
 const LOG_PREFIX = "[ingest:newsdata]";
 
 /**
@@ -189,26 +186,16 @@ function normalizeNews(body: Record<string, unknown>): NormalizedMentionInput[] 
 }
 
 /**
- * Translate a recency floor (ISO 8601) into NewsData's `timeframe` param — the
- * whole-hours window between `fromIso` and now, clamped to [1, 48]. Returns null
- * when `fromIso` is absent or unparseable so the caller simply omits the param.
- */
-function timeframeHours(fromIso?: string): string | null {
-  if (!fromIso) return null;
-  const from = new Date(fromIso).getTime();
-  if (Number.isNaN(from)) return null;
-  const hours = Math.ceil((Date.now() - from) / 3_600_000);
-  const clamped = Math.min(Math.max(hours, 1), MAX_TIMEFRAME_HOURS);
-  return String(clamped);
-}
-
-/**
  * Search news for a campaign's keywords in one batched OR query (splitting only
  * when the query would exceed the URL budget) and return normalized mentions
  * (without campaign_id). `country` is the campaign country ('AU'|'US'); it is
- * lowercased to the NewsData country code. `fromIso` is an optional recency
- * floor, passed through as a `timeframe` (hours, clamped to NewsData's 48h max)
- * so the API returns only recent items. Throws NewsDataError on non-200.
+ * lowercased to the NewsData country code.
+ *
+ * We deliberately do NOT send a `timeframe` param: on the /latest endpoint it is
+ * a paid-plan-only parameter (free plans reject it with 422), and /latest is
+ * already a rolling 48-hour window, so recency is inherent. The runner's own
+ * INGEST_MAX_AGE_DAYS post-filter enforces the exact recency window. `fromIso`
+ * is accepted for signature parity with the other news adapter but unused here.
  */
 export async function searchNews(
   apiKey: string,
@@ -216,10 +203,10 @@ export async function searchNews(
   country?: string,
   fromIso?: string
 ): Promise<NormalizedMentionInput[]> {
+  void fromIso; // recency is enforced by the runner's post-fetch filter
   const queries = buildQueries(keywords);
   const out: NormalizedMentionInput[] = [];
   const seen = new Set<string>();
-  const timeframe = timeframeHours(fromIso);
 
   for (const q of queries) {
     const params: Record<string, string> = {
@@ -230,7 +217,6 @@ export async function searchNews(
       removeduplicate: "1",
     };
     if (country) params.country = country.toLowerCase();
-    if (timeframe) params.timeframe = timeframe;
 
     const body = await ndGet(params);
     for (const row of normalizeNews(body)) {
