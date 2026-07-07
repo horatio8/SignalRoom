@@ -6,11 +6,28 @@
  * Auth: requires `Authorization: Bearer ${CRON_SECRET}`. When CRON_SECRET is
  * unset AND we're not in production, the check is skipped so the route can be
  * exercised locally (curl) — a genuine deploy must set CRON_SECRET.
+ *
+ * Optional `?only=` query param restricts which sources run: a comma-separated
+ * list of source names (e.g. `?only=gnews` or `?only=gnews,newsdata`). Unknown
+ * values are ignored; if none are valid the run falls back to all sources.
  */
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { runIngest } from "@/lib/ingest";
+import { INGEST_SOURCES, type IngestSource } from "@/lib/ingest/types";
+
+/** Parse `?only=` into a validated IngestSource list, or undefined for "all". */
+function parseOnly(request: Request): IngestSource[] | undefined {
+  const raw = new URL(request.url).searchParams.get("only");
+  if (!raw) return undefined;
+  const valid = new Set(INGEST_SOURCES);
+  const parsed = raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s): s is IngestSource => valid.has(s as IngestSource));
+  return parsed.length ? parsed : undefined;
+}
 
 // Ingest sweeps can run long; Vercel clamps maxDuration to the plan's ceiling.
 export const maxDuration = 300;
@@ -43,7 +60,8 @@ export async function GET(request: Request): Promise<Response> {
 
   // ---- run ----
   try {
-    const summary = await runIngest();
+    const only = parseOnly(request);
+    const summary = await runIngest(only ? { only } : undefined);
     return NextResponse.json(summary);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
