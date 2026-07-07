@@ -32,7 +32,7 @@ export default function NotFound() {
           404 · this page is not on the map
         </span>
         <Link
-          href="/voss/overview"
+          href="/"
           style={{
             display: "inline-flex",
             alignItems: "center",

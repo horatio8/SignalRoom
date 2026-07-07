@@ -114,9 +114,10 @@ export default function LoginPage() {
   const [ssoOpen, setSsoOpen] = useState(false);
   const [ssoDomain, setSsoDomain] = useState("");
 
-  // Redirect on successful sign-in (user becomes non-null).
+  // Redirect on successful sign-in (user becomes non-null). Home ("/") resolves
+  // to the user's first live campaign, or onboarding when they have none.
   useEffect(() => {
-    if (user) router.replace(`/${state.campaign || "voss"}/overview`);
+    if (user) router.replace(state.campaign ? `/${state.campaign}/overview` : "/");
   }, [user, state.campaign, router]);
 
   const anySso =

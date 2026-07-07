@@ -1,26 +1,10 @@
 /**
- * Mock data access layer. In production this module is the swap point:
- * replace dataFor() with RLS-scoped Supabase queries returning the same
- * view-model shapes (see docs/BACKEND.md).
+ * Data-layer barrel. The synthetic per-campaign fixtures (voss/marsh) are gone —
+ * the app reads real campaigns from Supabase through the live hooks
+ * (live.ts / liveAnalytics.ts / keywords.ts / liveCampaigns.ts). What remains
+ * here are the view-model TYPES those hooks map into, plus the non-campaign
+ * scaffolding the onboarding wizard renders (shared.ts).
  */
-
-import type { CampaignId } from "@/lib/state";
-import type { CampaignData } from "./types";
-import { voss } from "./voss";
-import { marsh } from "./marsh";
 
 export * from "./types";
 export * from "./shared";
-
-export const CAMPAIGNS: { id: CampaignId; label: string }[] = [
-  { id: "voss", label: "Voss for Senate · US-AZ" },
-  { id: "marsh", label: "Marsh for Mayor · AU-NSW" },
-];
-
-export function isCampaignId(v: string): v is CampaignId {
-  return v === "voss" || v === "marsh";
-}
-
-export function dataFor(c: CampaignId): CampaignData {
-  return c === "marsh" ? marsh : voss;
-}

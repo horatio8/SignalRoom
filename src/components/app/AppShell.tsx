@@ -8,8 +8,7 @@
 
 import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useApp, campaignResetPatch, type CampaignId, type Role } from "@/lib/state";
-import { dataFor, CAMPAIGNS, isCampaignId } from "@/lib/data";
+import { useApp, campaignResetPatch, type Role } from "@/lib/state";
 import { useLiveCampaigns } from "@/lib/data/liveCampaigns";
 import { displayType } from "@/lib/ui";
 import { useAuth } from "@/lib/auth/AuthProvider";
@@ -24,8 +23,8 @@ interface NavItem {
   roles?: Role[];
 }
 
-// `campaign` is a slug: a fixture id ("voss" | "marsh") or a live DB campaign
-// slug. It only ever gets template-interpolated into a path, so accept string.
+// `campaign` is a live DB campaign slug. It only ever gets template-interpolated
+// into a path, so accept string.
 export function screenHref(campaign: string, screen: string): string {
   if (screen === "admin") return "/admin";
   if (screen === "onboarding") return "/onboarding";
@@ -39,9 +38,8 @@ export function AppShell({
   children,
 }: {
   screen: string;
-  // A fixture id or a live campaign slug — unknown slugs render fixture data
-  // (dataFor falls back to voss); the Feed + Settings keywords are the live
-  // surfaces. Kept as string so the layout can pass live slugs through.
+  // A live campaign slug the user can see (RLS-scoped). The [campaign] layout
+  // only mounts this shell for confirmed live campaigns.
   campaign: string;
   children: React.ReactNode;
 }) {
@@ -49,13 +47,11 @@ export function AppShell({
   const { mode, user, signOut, passkeysEnabled, registerPasskey } = useAuth();
   const router = useRouter();
   const { role, dark } = state;
-  // Unknown (live) slugs fall back to voss fixtures inside dataFor — acceptable
-  // and pre-existing; only the Feed + Settings keywords read live rows.
-  const D = dataFor(campaign as CampaignId);
-  // Live campaigns the user can see, merged into the switcher below (fixtures
-  // first, then DB campaigns that don't shadow voss/marsh). Empty in demo mode.
+  // The campaign switcher's only source of truth: the live campaigns the user
+  // can see. Empty when signed out / no memberships (a disabled affordance).
   const { campaigns: liveCampaigns } = useLiveCampaigns();
-  const extraCampaigns = liveCampaigns.filter((c) => !isCampaignId(c.slug));
+  const currentName =
+    liveCampaigns.find((c) => c.slug === campaign)?.name ?? campaign;
   const canManage = role !== "client";
   const isClient = role === "client";
 
@@ -71,9 +67,7 @@ export function AppShell({
 
   // Keep "current campaign" in state for the campaign-less routes (/admin, /onboarding).
   useEffect(() => {
-    // state.campaign is typed CampaignId; a live slug is stored via cast (it
-    // only feeds routing + dataFor, both of which tolerate unknown slugs).
-    if (state.campaign !== campaign) set({ campaign: campaign as CampaignId });
+    if (state.campaign !== campaign) set({ campaign });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign]);
 
@@ -92,8 +86,8 @@ export function AppShell({
     { id: "feed", label: "Feed" },
     { id: "stories", label: "Stories" },
     { id: "briefings", label: "Briefings" },
-    { id: "alerts", label: "Alerts", badge: D.alertBadge, roles: ["owner", "operator"] },
-    { id: "respond", label: "Respond", badge: D.respondBadge, roles: ["owner", "operator"] },
+    { id: "alerts", label: "Alerts", roles: ["owner", "operator"] },
+    { id: "respond", label: "Respond", roles: ["owner", "operator"] },
     { id: "reach", label: "Reach", roles: ["owner", "operator"] },
     { id: "settings", label: "Settings", roles: ["owner", "operator"] },
     { id: "templates", label: "Templates", roles: ["owner", "operator"] },
@@ -108,10 +102,10 @@ export function AppShell({
     }
   };
 
-  // Fixture ids and live slugs switch identically: reset per-campaign state and
-  // navigate to the same screen under the new slug (mirrors fixture switching).
+  // Switching a campaign resets per-campaign state and navigates to the same
+  // screen under the new slug (campaign-less routes stay put).
   const setCampaign = (c: string) => {
-    set({ campaign: c as CampaignId, ...campaignResetPatch });
+    set({ campaign: c, ...campaignResetPatch });
     if (screen !== "admin" && screen !== "onboarding") {
       router.push(screenHref(c, screen));
     }
@@ -169,34 +163,50 @@ export function AppShell({
           Signal<span style={{ color: "var(--text-secondary)", fontWeight: 500 }}> Room</span>
         </div>
         <div style={{ width: 1, height: 20, background: "var(--border-default)" }} />
-        <select
-          value={campaign}
-          onChange={(e) => setCampaign(e.target.value)}
-          style={{
-            height: 30,
-            padding: "0 28px 0 10px",
-            borderRadius: 8,
-            background: "var(--surface-raised)",
-            border: "1px solid var(--border-default)",
-            fontFamily: "var(--font-ui)",
-            fontSize: 12.5,
-            color: "var(--text-primary)",
-            cursor: "pointer",
-            outline: "none",
-            appearance: "auto",
-          }}
-        >
-          {CAMPAIGNS.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
-            </option>
-          ))}
-          {extraCampaigns.map((c) => (
-            <option key={c.slug} value={c.slug}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        {liveCampaigns.length === 0 ? (
+          // No live campaigns visible to this user — a disabled affordance; the
+          // "+ New campaign" action in the sidebar is the way forward.
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              height: 30,
+              padding: "0 10px",
+              borderRadius: 8,
+              background: "var(--surface-raised)",
+              border: "1px solid var(--border-default)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 12.5,
+              color: "var(--text-tertiary)",
+            }}
+          >
+            No campaigns
+          </span>
+        ) : (
+          <select
+            value={campaign}
+            onChange={(e) => setCampaign(e.target.value)}
+            style={{
+              height: 30,
+              padding: "0 28px 0 10px",
+              borderRadius: 8,
+              background: "var(--surface-raised)",
+              border: "1px solid var(--border-default)",
+              fontFamily: "var(--font-ui)",
+              fontSize: 12.5,
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              outline: "none",
+              appearance: "auto",
+            }}
+          >
+            {liveCampaigns.map((c) => (
+              <option key={c.slug} value={c.slug}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        )}
         <div
           style={{
             display: "flex",
@@ -463,7 +473,7 @@ export function AppShell({
                   border: "1px solid var(--accent-border)",
                 }}
               >
-                <span style={{ ...displayType, fontWeight: 700, fontSize: 12.5 }}>{D.name}</span>
+                <span style={{ ...displayType, fontWeight: 700, fontSize: 12.5 }}>{currentName}</span>
                 <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
                   client portal · white-labeled · read-only · low-relevance noise filtered
                 </span>
