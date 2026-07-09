@@ -30,12 +30,15 @@
 
 import { useEffect, useState } from "react";
 import type { CampaignId } from "@/lib/state";
-import type { Kpi, Story, ClusterListItem, FeaturedCluster, MediaType } from "./types";
+import type { Kpi, Story, ClusterListItem, FeaturedCluster, MediaType, Journalist } from "./types";
 import { signed } from "@/lib/ui";
 import { createClient } from "@/lib/supabase/client";
 
 const POLL_MS = 120_000;
 const DAY_MS = 86_400_000;
+
+/** The four message-box quadrants stamped on enriched mentions (S12). */
+type Quadrant = "usUs" | "usThem" | "themUs" | "themThem";
 
 /* CSS color vars reused for delta tones (raw, like the fixtures pass). */
 const POS = "var(--pos-text)";
@@ -54,6 +57,8 @@ interface OverviewMentionRow {
   platform: string;
   media_type: MediaType;
   reach_score: number | null;
+  /** S12 stance quadrant; null until the enrichment worker classifies the row. */
+  message_box_quadrant: Quadrant | null;
 }
 
 /** The clusters columns both screens map from. */
@@ -186,6 +191,31 @@ function toFeatured(c: ClusterRow, ctx: HeatCtx, fallback: FeaturedCluster): Fea
 
 /* ================= S1 Overview ================= */
 
+/**
+ * Us-vs-them share of voice over the last 24h, from message_box_quadrant.
+ * us = usUs + usThem (we set the agenda), them = themThem + themUs (they do).
+ * `deltaPct` is the change in usPct vs the prior-6-day window in percentage
+ * points, or null when either window has no classified rows (no honest baseline).
+ */
+export interface ShareOfVoice {
+  usPct: number;
+  themPct: number;
+  usCount: number;
+  themCount: number;
+  /** usCount + themCount — 0 means nothing is classified yet (empty, not fake). */
+  total: number;
+  deltaPct: number | null;
+}
+
+/** One day of the 30-day volume trend: total mentions split us vs them. */
+export interface VolumePoint {
+  /** Local calendar day, "YYYY-MM-DD". */
+  date: string;
+  us: number;
+  them: number;
+  total: number;
+}
+
 export interface LiveOverview {
   /** True only when the mentions query succeeded AND returned ≥ 1 row. */
   live: boolean;
@@ -195,24 +225,35 @@ export interface LiveOverview {
   volumeKpi: Kpi;
   /** Net sentiment KPI with a prior-6-day baseline delta. */
   sentimentKpi: Kpi;
+  /** Urgent alerts (severity='urgent') fired in the last 24h; 0 is a live value. */
+  urgentAlerts24h: number;
   mediaCount: number;
   socialCount: number;
   mediaPct: number;
+  /** Us-vs-them share of voice (last 24h) from message_box_quadrant. */
+  shareOfVoice: ShareOfVoice;
   /** 24-length heat strip (0..5) indexed by hour-of-day, last 24h normalized. */
   hours: number[];
+  /** Per-day volume series (up to 30 days, contiguous from first day of data). */
+  volumeSeries: VolumePoint[];
   /** Top clusters (hottest first, up to 5) as Overview story rows. */
   stories: Story[];
 }
+
+const EMPTY_SOV: ShareOfVoice = { usPct: 0, themPct: 0, usCount: 0, themCount: 0, total: 0, deltaPct: null };
 
 const EMPTY_OVERVIEW: LiveOverview = {
   live: false,
   mentionCount: 0,
   volumeKpi: { label: "24h volume", value: "0", delta: NO_BASELINE, tone: MUTED, heat: 0 },
   sentimentKpi: { label: "Net sentiment", value: "0", delta: NO_BASELINE, tone: MUTED, heat: 0 },
+  urgentAlerts24h: 0,
   mediaCount: 0,
   socialCount: 0,
   mediaPct: 0,
+  shareOfVoice: EMPTY_SOV,
   hours: new Array(24).fill(0),
+  volumeSeries: [],
   stories: [],
 };
 
@@ -221,10 +262,33 @@ function mean(xs: number[]): number | null {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 }
 
-function buildOverview(rows: OverviewMentionRow[], clusters: ClusterRow[]): LiveOverview {
+/** us = usUs+usThem (we drive the frame); null/other quadrants are neither. */
+function isUsQuadrant(q: Quadrant | null): boolean {
+  return q === "usUs" || q === "usThem";
+}
+/** them = themThem+themUs (they drive the frame). */
+function isThemQuadrant(q: Quadrant | null): boolean {
+  return q === "themThem" || q === "themUs";
+}
+
+/** Local calendar-day key ("YYYY-MM-DD") for daily bucketing. */
+function dayKey(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function buildOverview(
+  rows: OverviewMentionRow[],
+  clusters: ClusterRow[],
+  urgentAlerts24h: number
+): LiveOverview {
   const now = Date.now();
   const todayFloor = now - DAY_MS; // rolling last 24h
   const priorFloor = now - 7 * DAY_MS; // start of the 6-day baseline window
+  const trendFloor = now - 30 * DAY_MS; // 30-day volume series window
 
   const ts = (r: OverviewMentionRow): number => {
     const t = r.published_at ? new Date(r.published_at).getTime() : NaN;
@@ -269,6 +333,63 @@ function buildOverview(rows: OverviewMentionRow[], clusters: ClusterRow[]): Live
   const mixTotal = mediaCount + socialCount;
   const mediaPct = mixTotal > 0 ? Math.round((mediaCount / mixTotal) * 100) : 0;
 
+  // --- us-vs-them share of voice (last 24h) from message_box_quadrant ---
+  // Only classified rows count; unenriched (null quadrant) rows are excluded so
+  // the split is honest. usPct + themPct == 100 whenever anything is classified.
+  const sovUsCount = today.filter((r) => isUsQuadrant(r.message_box_quadrant)).length;
+  const sovThemCount = today.filter((r) => isThemQuadrant(r.message_box_quadrant)).length;
+  const sovTotal = sovUsCount + sovThemCount;
+  const usPct = sovTotal > 0 ? Math.round((sovUsCount / sovTotal) * 100) : 0;
+  const themPct = sovTotal > 0 ? 100 - usPct : 0;
+  // prior-window share (same rule) for a percentage-point delta, when both exist.
+  const priorUs = prior.filter((r) => isUsQuadrant(r.message_box_quadrant)).length;
+  const priorThem = prior.filter((r) => isThemQuadrant(r.message_box_quadrant)).length;
+  const priorSovTotal = priorUs + priorThem;
+  const sovDelta =
+    sovTotal > 0 && priorSovTotal > 0 ? usPct - Math.round((priorUs / priorSovTotal) * 100) : null;
+  const shareOfVoice: ShareOfVoice = {
+    usPct,
+    themPct,
+    usCount: sovUsCount,
+    themCount: sovThemCount,
+    total: sovTotal,
+    deltaPct: sovDelta,
+  };
+
+  // --- 30-day per-day volume series (us/them/total), contiguous from day one ---
+  const inTrend = rows.filter((r) => {
+    const t = ts(r);
+    return t !== -Infinity && t >= trendFloor;
+  });
+  const dayBuckets = new Map<string, { us: number; them: number; total: number }>();
+  let minTs = Infinity;
+  for (const r of inTrend) {
+    const t = ts(r);
+    if (t < minTs) minTs = t;
+    const key = dayKey(t);
+    const b = dayBuckets.get(key) ?? { us: 0, them: 0, total: 0 };
+    b.total++;
+    if (isUsQuadrant(r.message_box_quadrant)) b.us++;
+    else if (isThemQuadrant(r.message_box_quadrant)) b.them++;
+    dayBuckets.set(key, b);
+  }
+  const volumeSeries: VolumePoint[] = [];
+  if (inTrend.length > 0) {
+    // Walk contiguous local days from the first day of data through today so the
+    // line has an unbroken x-axis; empty interior days read as honest zeros.
+    const cursor = new Date(minTs);
+    cursor.setHours(0, 0, 0, 0);
+    const endKey = dayKey(now);
+    // Cap the walk at 31 iterations (30-day window) as a defensive bound.
+    for (let i = 0; i < 31; i++) {
+      const key = dayKey(cursor.getTime());
+      const b = dayBuckets.get(key) ?? { us: 0, them: 0, total: 0 };
+      volumeSeries.push({ date: key, us: b.us, them: b.them, total: b.total });
+      if (key === endKey) break;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+
   // --- 24h heat strip: per clock-hour count, normalized to the window's max ---
   const buckets = new Array(24).fill(0);
   for (const r of today) {
@@ -293,10 +414,13 @@ function buildOverview(rows: OverviewMentionRow[], clusters: ClusterRow[]): Live
     mentionCount: rows.length,
     volumeKpi,
     sentimentKpi,
+    urgentAlerts24h,
     mediaCount,
     socialCount,
     mediaPct,
+    shareOfVoice,
     hours,
+    volumeSeries,
     stories,
   };
 }
@@ -322,13 +446,16 @@ export function useLiveOverview(campaign: CampaignId): LiveOverview {
     let cancelled = false;
 
     const load = async () => {
-      const sinceISO = new Date(Date.now() - 7 * DAY_MS).toISOString();
+      // 30-day window so the volume trend has history; the 24h/7-day KPIs still
+      // filter within these rows by timestamp, so widening the fetch is safe.
+      const sinceISO = new Date(Date.now() - 30 * DAY_MS).toISOString();
+      const alertsSinceISO = new Date(Date.now() - DAY_MS).toISOString();
 
-      const [mres, cres] = await Promise.all([
+      const [mres, cres, ares] = await Promise.all([
         supabase
           .from("mentions")
           .select(
-            "published_at, sentiment, relevance, platform, media_type, reach_score, campaigns!inner(slug)"
+            "published_at, sentiment, relevance, platform, media_type, reach_score, message_box_quadrant, campaigns!inner(slug)"
           )
           .eq("campaigns.slug", campaign)
           .is("duplicate_of", null)
@@ -345,6 +472,14 @@ export function useLiveOverview(campaign: CampaignId): LiveOverview {
           .eq("campaigns.slug", campaign)
           .order("last_seen", { ascending: false, nullsFirst: false })
           .limit(30),
+        // Urgent alerts fired in the last 24h (RLS-scoped by campaign slug).
+        // head:true + count:exact returns the count without shipping rows.
+        supabase
+          .from("alerts")
+          .select("id, campaigns!inner(slug)", { count: "exact", head: true })
+          .eq("campaigns.slug", campaign)
+          .eq("severity", "urgent")
+          .gte("fired_at", alertsSinceISO),
       ]);
 
       if (cancelled) return;
@@ -354,7 +489,9 @@ export function useLiveOverview(campaign: CampaignId): LiveOverview {
       }
       const rows = mres.data as unknown as OverviewMentionRow[];
       const clusters = (!cres.error && cres.data ? (cres.data as unknown as ClusterRow[]) : []);
-      setState(buildOverview(rows, clusters));
+      // Best-effort: a failed alerts read reads as 0 (honest live zero), not an error.
+      const urgentAlerts24h = !ares.error && typeof ares.count === "number" ? ares.count : 0;
+      setState(buildOverview(rows, clusters, urgentAlerts24h));
     };
 
     void load();
@@ -457,6 +594,83 @@ export function useLiveStories(campaign: CampaignId, fallback: FeaturedCluster):
     };
     // fallback is the campaign's fixture fc — stable per campaign; re-run on slug.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign]);
+
+  return state;
+}
+
+/* ---------- Press corps (F2, grown from bylines) ---------- */
+
+/** The journalists columns the Press corps tab reads (name, outlet + metrics). */
+interface JournalistRow {
+  name: string;
+  outlet: string | null;
+  mention_count: number | null;
+  avg_sentiment: number | null;
+  last_wrote_at: string | null;
+}
+
+export interface LivePressCorps {
+  /** True when the journalists query succeeded AND returned ≥ 1 row. */
+  live: boolean;
+  /** Journalist rows mapped to the S3 view model; [] until bylines populate it. */
+  journalists: Journalist[];
+}
+
+/** last_wrote_at → the compact absolute stamp the Journalist row shows. */
+function toJournalist(row: JournalistRow): Journalist {
+  return {
+    name: row.name,
+    outlet: row.outlet?.trim() || "—",
+    count: formatCount(row.mention_count ?? 0),
+    // Unenriched (avg_sentiment null) reads neutral 0, never a fabricated tone.
+    sentV: row.avg_sentiment ?? 0,
+    last: absTime(row.last_wrote_at),
+  };
+}
+
+/**
+ * Live press corps for a campaign — the F2 journalist table, grown from news
+ * bylines by the enrichment pipeline (out of scope here; this is the read side).
+ * RLS-scoped, best-effort, 120s poll. The table is empty until bylines populate
+ * it, so `live` is false and the caller renders an honest empty state — never a
+ * fabricated roster.
+ */
+export function useLivePressCorps(campaign: CampaignId): LivePressCorps {
+  const [state, setState] = useState<LivePressCorps>({ live: false, journalists: [] });
+
+  useEffect(() => {
+    const supabase = createClient();
+    if (!supabase) {
+      setState({ live: false, journalists: [] });
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      const { data, error } = await supabase
+        .from("journalists")
+        .select("name, outlet, mention_count, avg_sentiment, last_wrote_at, campaigns!inner(slug)")
+        .eq("campaigns.slug", campaign)
+        .order("mention_count", { ascending: false, nullsFirst: false })
+        .limit(50);
+
+      if (cancelled) return;
+      if (error || !data || data.length === 0) {
+        setState({ live: false, journalists: [] });
+        return;
+      }
+      const journalists = (data as unknown as JournalistRow[]).map(toJournalist);
+      setState({ live: journalists.length > 0, journalists });
+    };
+
+    void load();
+    const timer = setInterval(() => void load(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [campaign]);
 
   return state;
