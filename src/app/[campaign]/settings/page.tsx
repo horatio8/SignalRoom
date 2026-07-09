@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import { useApp } from "@/lib/state";
 import type { KeywordKind } from "@/lib/data";
 import { useKeywordManager, type LiveKeyword } from "@/lib/data/keywords";
+import { useRecipients, type LiveRecipient, type RecipientField } from "@/lib/data/liveRecipients";
 import { useCampaignKeys } from "@/lib/data/campaignKeys";
 import { kindLabel } from "@/lib/campaignType";
 import { Switch } from "@/components/ds";
@@ -31,6 +32,44 @@ export default function SettingsPage() {
 
   // Live source health for the right-column card (wired ingest sources only).
   const usage = useServiceUsage();
+
+  // Live delivery recipients: the Delivery card manages real
+  // `campaign_recipients` rows through this hook (RLS owner/operator writes).
+  const rec = useRecipients(campaign);
+  const [recEmail, setRecEmail] = React.useState("");
+  const [recName, setRecName] = React.useState("");
+  const [recBriefing, setRecBriefing] = React.useState(true);
+  const [recUrgent, setRecUrgent] = React.useState(true);
+
+  const addRecipient = async () => {
+    const email = recEmail.trim();
+    if (!email) return;
+    // RLS denial (client_viewer) or a unique/constraint rejection surfaces here.
+    const err = await rec.add(email, recName, {
+      briefing: recBriefing,
+      urgent: recUrgent,
+    });
+    if (err) return notify(err);
+    notify("Recipient added — emails send once RESEND_API_KEY is configured");
+    setRecEmail("");
+    setRecName("");
+    setRecBriefing(true);
+    setRecUrgent(true);
+  };
+
+  const toggleRecipient = async (row: LiveRecipient, field: RecipientField) => {
+    const next = !row[field];
+    const err = await rec.toggle(row.id, field, next);
+    if (err) return notify(err);
+    const label = field === "gets_briefing" ? "briefing" : "urgent";
+    notify(next ? `Recipient opted in to ${label}` : `Recipient opted out of ${label}`);
+  };
+
+  const removeRecipient = async (id: string) => {
+    const err = await rec.remove(id);
+    if (err) return notify(err);
+    notify("Recipient removed");
+  };
 
   // Live BYOK: the Client-integrations card reads + writes real
   // `campaign_integrations` rows through this hook (RLS owner/operator only).
@@ -98,6 +137,21 @@ export default function SettingsPage() {
     color: "var(--text-primary)",
     outline: "none",
   };
+
+  // Small on/off pill for a recipient's per-stream opt-in (briefing / urgent).
+  const streamChipStyle = (on: boolean): React.CSSProperties => ({
+    flex: "none",
+    height: 26,
+    padding: "0 10px",
+    borderRadius: 8,
+    border: `1px solid ${on ? "var(--accent-border)" : "var(--border-default)"}`,
+    background: on ? "var(--accent-subtle)" : "var(--surface-panel)",
+    color: on ? "var(--accent-text)" : "var(--text-tertiary)",
+    fontFamily: "var(--font-ui)",
+    fontSize: 11,
+    fontWeight: 500,
+    cursor: "pointer",
+  });
 
   return (
     <div data-screen-label="S6 Settings" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -312,12 +366,171 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Delivery — not wired to live data yet */}
-          <div style={{ ...cardSurface }}>
-            <EmptyState
-              title="Delivery"
-              note="Not available yet — briefing schedule and recipients aren't wired to live data."
-            />
+          {/* Delivery — live recipient management (campaign_recipients). */}
+          <div style={{ ...cardSurface, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>Delivery</span>
+              <span style={monoMeta}>{rec.recipients.length} recipients</span>
+              <span style={{ ...monoMeta, marginLeft: "auto" }}>briefing · urgent</span>
+            </div>
+            <span style={{ fontSize: 11.5, lineHeight: 1.5, color: "var(--text-secondary)" }}>
+              Recipients receive the morning briefing and/or urgent alerts by email — no account needed.
+              Emails send once RESEND_API_KEY is configured.
+            </span>
+
+            {/* Add row: email + optional name, with per-stream opt-ins. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={recEmail}
+                  onChange={(e) => setRecEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void addRecipient();
+                  }}
+                  placeholder="email@campaign.org"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    height: 30,
+                    padding: "0 12px",
+                    borderRadius: 8,
+                    background: "var(--surface-panel)",
+                    border: "1px solid var(--border-default)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    color: "var(--text-primary)",
+                    outline: "none",
+                  }}
+                />
+                <input
+                  value={recName}
+                  onChange={(e) => setRecName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void addRecipient();
+                  }}
+                  placeholder="name (optional)"
+                  style={{
+                    width: 120,
+                    flex: "none",
+                    height: 30,
+                    padding: "0 12px",
+                    borderRadius: 8,
+                    background: "var(--surface-panel)",
+                    border: "1px solid var(--border-default)",
+                    fontFamily: "var(--font-ui)",
+                    fontSize: 12,
+                    color: "var(--text-primary)",
+                    outline: "none",
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setRecBriefing((v) => !v)}
+                  style={streamChipStyle(recBriefing)}
+                >
+                  briefing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecUrgent((v) => !v)}
+                  style={streamChipStyle(recUrgent)}
+                >
+                  urgent
+                </button>
+                <button
+                  onClick={() => void addRecipient()}
+                  style={{
+                    marginLeft: "auto",
+                    height: 30,
+                    padding: "0 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border-default)",
+                    background: "var(--surface-panel)",
+                    fontFamily: "var(--font-ui)",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Add recipient
+                </button>
+              </div>
+            </div>
+
+            {/* Recipient list. */}
+            {rec.recipients.length === 0 ? (
+              <span style={{ fontSize: 11.5, color: "var(--text-tertiary)" }}>
+                No recipients yet — add an address above.
+              </span>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {rec.recipients.map((row) => (
+                  <div
+                    key={row.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "var(--surface-raised)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+                      <span
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 12,
+                          color: "var(--text-primary)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {row.email}
+                      </span>
+                      {row.name && (
+                        <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{row.name}</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void toggleRecipient(row, "gets_briefing")}
+                      style={streamChipStyle(row.gets_briefing)}
+                    >
+                      briefing
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void toggleRecipient(row, "gets_urgent")}
+                      style={streamChipStyle(row.gets_urgent)}
+                    >
+                      urgent
+                    </button>
+                    <button
+                      onClick={() => void removeRecipient(row.id)}
+                      style={{
+                        flex: "none",
+                        border: "none",
+                        background: "none",
+                        padding: 0,
+                        fontFamily: "var(--font-ui)",
+                        fontSize: 11,
+                        color: "var(--text-tertiary)",
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Client integrations */}
