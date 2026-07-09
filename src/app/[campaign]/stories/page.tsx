@@ -10,7 +10,7 @@ import React from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp } from "@/lib/state";
 import type { FeaturedCluster } from "@/lib/data";
-import { useLiveStories } from "@/lib/data/liveAnalytics";
+import { useLiveStories, useLivePressCorps } from "@/lib/data/liveAnalytics";
 import { Sparkline } from "@/components/ds";
 import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, heatTone, monoMeta, overline, sentTone, signed } from "@/lib/ui";
@@ -52,6 +52,9 @@ export default function StoriesPage() {
   const fc = live.fc;
   const otherClusters = live.otherClusters;
   const fss = sentTone(fc.sentV);
+
+  // Press corps (F2) — grown from news bylines; empty until the pipeline fills it.
+  const press = useLivePressCorps(campaign);
 
   const tabs = [
     { id: "clusters", label: "Clusters" },
@@ -359,12 +362,55 @@ export default function StoriesPage() {
         </div>
       )}
 
-      {storyTab === "press" && (
+      {storyTab === "press" && !press.live && (
         <div style={{ ...cardSurface }}>
           <EmptyState
-            title="Press corps"
-            note="Not available yet — the journalist byline breakdown isn't wired to live data."
+            title="Press corps builds from news bylines"
+            note="As news mentions are enriched, the journalists behind them accrue here with outlet, volume, and how they lean."
           />
+        </div>
+      )}
+
+      {storyTab === "press" && press.live && (
+        <div style={{ ...cardSurface, overflow: "hidden" }}>
+          {press.journalists.map((j) => {
+            const ss = sentTone(j.sentV);
+            return (
+              <div
+                key={`${j.name}·${j.outlet}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "12px 16px",
+                  borderBottom: "1px solid var(--border-subtle)",
+                }}
+              >
+                <span style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0, flex: 1 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {j.name}
+                  </span>
+                  <span style={monoMeta}>
+                    {j.outlet} · {j.count} mentions · last {j.last}
+                  </span>
+                </span>
+                <span
+                  style={{
+                    flex: "none",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    padding: "2px 8px",
+                    borderRadius: 6,
+                    background: ss.bg,
+                    color: ss.fg,
+                  }}
+                >
+                  {signed(j.sentV)}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

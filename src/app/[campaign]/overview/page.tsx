@@ -11,40 +11,128 @@
 
 import React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useLiveOverview } from "@/lib/data/liveAnalytics";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ResponsiveContainer,
+} from "recharts";
+import { useLiveOverview, type ShareOfVoice, type VolumePoint } from "@/lib/data/liveAnalytics";
 import { KpiCard } from "@/components/ds";
 import { EmptyState } from "@/components/app/EmptyState";
 import { cardSurface, displayType, heatTone, monoMeta, overline, sentTone, signed } from "@/lib/ui";
 
-/** A KPI-shaped placeholder (dashed) for a metric not wired to live data yet. */
-function NotWiredKpi({ label, note }: { label: string; note: string }) {
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "YYYY-MM-DD" → "Jul 7" (compact mono axis label). */
+function fmtDay(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  if (!y || !m || !d) return key;
+  return `${MONTHS[m - 1]} ${d}`;
+}
+
+/**
+ * 30-day volume trend, styled like the design's VolumeChart (sunken plot, gray
+ * grid, us = accent line with end dot, opponent = neutral gray — never red).
+ * Unlike the fixture chart the x-axis carries the real dates in the series, so a
+ * short series (a few days of ingest) renders honestly rather than faking a full
+ * month. Only the first / middle / last day are ticked to avoid crowding.
+ */
+function TrendChart({ series }: { series: VolumePoint[] }) {
+  const data = series.map((p, i) => ({ i, us: p.us, them: p.them, date: p.date }));
+  const last = data.length - 1;
+  const ticks = Array.from(new Set([0, Math.floor(last / 2), last])).filter((t) => t >= 0);
   return (
     <div
       style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        padding: "18px 20px",
-        borderRadius: "var(--radius-lg)",
-        background: "var(--surface-panel)",
-        border: "1px dashed var(--border-default)",
-        boxShadow: "var(--shadow-card-light)",
-        minWidth: 0,
+        flex: 1,
+        background: "var(--surface-sunken)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: 10,
+        padding: "12px 12px 6px",
       }}
     >
-      <span
-        style={{
-          fontSize: "var(--text-2xs)",
-          fontWeight: 600,
-          letterSpacing: "var(--label-tracking)",
-          textTransform: "uppercase",
-          color: "var(--text-tertiary)",
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ fontSize: 12.5, lineHeight: 1.5, color: "var(--text-tertiary)" }}>{note}</span>
+      <ResponsiveContainer width="100%" height={185}>
+        <LineChart data={data} margin={{ top: 8, right: 26, bottom: 0, left: 10 }}>
+          <CartesianGrid vertical={false} stroke="var(--chart-grid)" strokeWidth={1} />
+          <XAxis
+            dataKey="i"
+            ticks={ticks}
+            tickFormatter={(v: number) => fmtDay(data[v]?.date ?? "")}
+            tick={{ fontFamily: "var(--font-mono)", fontSize: 10, fill: "var(--text-tertiary)" }}
+            axisLine={false}
+            tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis hide domain={[0, "dataMax + 2"]} />
+          <Line
+            type="linear"
+            dataKey="them"
+            stroke="var(--chart-them)"
+            strokeWidth={2}
+            dot={data.length === 1 ? { r: 3, fill: "var(--chart-them)" } : false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="linear"
+            dataKey="us"
+            stroke="var(--chart-us)"
+            strokeWidth={2}
+            dot={data.length === 1 ? { r: 3.5, fill: "var(--chart-us)" } : false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
+  );
+}
+
+/**
+ * Us-vs-them share-of-voice bar (last 24h) from message_box_quadrant. Us is the
+ * accent, them is neutral gray (never red — them is not negative sentiment). The
+ * delta line shows the percentage-point swing vs the prior period when both
+ * windows have classified rows, and is omitted cleanly otherwise.
+ */
+function ShareOfVoiceBar({ sov }: { sov: ShareOfVoice }) {
+  if (sov.total === 0) {
+    return (
+      <span style={{ fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
+        No classified mentions in the last 24h — share of voice accrues as enrichment tags stance.
+      </span>
+    );
+  }
+  const deltaTone =
+    sov.deltaPct == null
+      ? "var(--text-tertiary)"
+      : sov.deltaPct > 0
+        ? "var(--pos-text)"
+        : sov.deltaPct < 0
+          ? "var(--text-secondary)"
+          : "var(--text-tertiary)";
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", ...monoMeta }}>
+        <span>us {sov.usPct}%</span>
+        <span>them {sov.themPct}%</span>
+      </div>
+      <div style={{ display: "flex", height: 10, borderRadius: 999, overflow: "hidden", gap: 2 }}>
+        <span style={{ width: `${sov.usPct}%`, background: "var(--chart-us)" }} />
+        <span style={{ flex: 1, background: "var(--chart-them)" }} />
+      </div>
+      <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+        {sov.usCount} us · {sov.themCount} them
+        {sov.deltaPct != null && (
+          <>
+            {" · "}
+            <span style={{ fontFamily: "var(--font-mono)", color: deltaTone }}>
+              {signed(sov.deltaPct)} pp vs prior
+            </span>
+          </>
+        )}
+      </span>
+    </>
   );
 }
 
@@ -99,7 +187,13 @@ export default function OverviewPage() {
           deltaColor={ov.sentimentKpi.tone}
           heat={ov.sentimentKpi.heat}
         />
-        <NotWiredKpi label="Active urgent alerts" note="Not wired yet." />
+        <KpiCard
+          label="Active urgent alerts"
+          value={String(ov.urgentAlerts24h)}
+          delta="last 24h"
+          deltaColor="var(--text-tertiary)"
+          heat={ov.urgentAlerts24h > 0 ? 4 : 0}
+        />
       </div>
 
       {/* chart (not wired) + split (live) */}
@@ -107,23 +201,31 @@ export default function OverviewPage() {
         <div style={{ ...cardSurface, padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
             <span style={{ fontSize: 16, fontWeight: 600 }}>30-day trend</span>
-            <span style={monoMeta}>last 30 days</span>
+            <span style={monoMeta}>
+              {ov.volumeSeries.length > 0
+                ? `${ov.volumeSeries.length} ${ov.volumeSeries.length === 1 ? "day" : "days"} · us vs them`
+                : "last 30 days"}
+            </span>
           </div>
-          <div
-            style={{
-              flex: 1,
-              minHeight: 160,
-              display: "flex",
-              borderRadius: 10,
-              border: "1px dashed var(--border-default)",
-              background: "var(--surface-sunken)",
-            }}
-          >
-            <EmptyState
-              title="30-day trend"
-              note="Accrues with history — the volume and share-of-voice series build as days of ingest accumulate."
-            />
-          </div>
+          {ov.volumeSeries.length > 0 ? (
+            <TrendChart series={ov.volumeSeries} />
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                minHeight: 160,
+                display: "flex",
+                borderRadius: 10,
+                border: "1px dashed var(--border-default)",
+                background: "var(--surface-sunken)",
+              }}
+            >
+              <EmptyState
+                title="30-day trend"
+                note="Accrues with history — the volume and share-of-voice series build as days of ingest accumulate."
+              />
+            </div>
+          )}
         </div>
 
         <div style={{ ...cardSurface, padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
@@ -141,11 +243,9 @@ export default function OverviewPage() {
               Last 24h · {ov.mediaPct}% media
             </span>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <span style={overline}>Share of voice · 24h</span>
-            <span style={{ fontSize: 11.5, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
-              Share of voice — needs opponent classification.
-            </span>
+            <ShareOfVoiceBar sov={ov.shareOfVoice} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
             <span style={overline}>Hour-by-hour heat · 24h</span>
