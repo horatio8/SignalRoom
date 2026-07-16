@@ -5,9 +5,11 @@
  * key to the browser.
  *
  * Usage:
- *   node scripts/create-user.mjs                      # owner@signalroom.app + the demo password
- *   node scripts/create-user.mjs you@campaign.org     # custom email, demo password
- *   node scripts/create-user.mjs you@campaign.org 'Str0ng-Pass'   # custom email + password
+ *   node scripts/create-user.mjs you@campaign.org 'Str0ng-Pass'   # email + password
+ *   node scripts/create-user.mjs you@campaign.org                 # email; password from $NEW_USER_PASSWORD
+ *
+ * A password is REQUIRED (arg 2 or $NEW_USER_PASSWORD) — there is no default, so
+ * no shared/committed credential can provision a real production account.
  *
  * Requires env (from .env.local / your shell):
  *   NEXT_PUBLIC_SUPABASE_URL
@@ -20,10 +22,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 
-// Keep this in sync with the demo credential in src/lib/auth/AuthProvider.tsx
-// and docs/AUTH.md.
 const DEFAULT_EMAIL = "owner@signalroom.app";
-const DEFAULT_PASSWORD = "Signal-Room-DH3MCCKk";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -41,7 +40,15 @@ if (!url) {
 }
 
 const email = process.argv[2] ?? DEFAULT_EMAIL;
-const password = process.argv[3] ?? DEFAULT_PASSWORD;
+const password = process.argv[3] ?? process.env.NEW_USER_PASSWORD;
+
+if (!password) {
+  console.error(
+    "Refusing to run: no password given.\n" +
+      "Pass one as the second argument or set $NEW_USER_PASSWORD — there is no default."
+  );
+  process.exit(1);
+}
 
 const supabase = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },

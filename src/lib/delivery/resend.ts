@@ -23,7 +23,11 @@ export function deliveryConfigured(): boolean {
 }
 
 export interface SendEmailInput {
-  /** One or more recipient addresses. */
+  /**
+   * One or more recipient addresses. These are sent as BCC so recipients are
+   * never exposed to each other — a campaign's briefing/alert list often mixes
+   * staff, advisers, and journalists who must not see one another's addresses.
+   */
   to: string[];
   subject: string;
   /** Pre-rendered HTML body. */
@@ -66,7 +70,10 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       },
       body: JSON.stringify({
         from: deliveryFrom(),
-        to: input.to,
+        // Visible To is the sender identity; real recipients go to BCC so they
+        // are hidden from one another (privacy — see SendEmailInput.to).
+        to: [deliveryFrom()],
+        bcc: input.to,
         subject: input.subject,
         html: input.html,
       }),

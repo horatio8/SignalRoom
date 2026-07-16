@@ -15,6 +15,8 @@ import { useAuth } from "@/lib/auth/AuthProvider";
 
 /** Screens a client_viewer may see (role gating per handoff §App shell). */
 const CLIENT_ALLOWED = ["overview", "narrative", "feed", "stories", "briefings"];
+/** Screens only an owner may see — enforced on direct navigation, not just nav. */
+const OWNER_ONLY = ["admin"];
 
 interface NavItem {
   id: string;
@@ -71,10 +73,15 @@ export function AppShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaign]);
 
-  // Role gating on direct navigation: clients bounce off gated screens.
+  // Role gating on direct navigation (not just nav visibility): clients bounce
+  // off gated screens, and non-owners bounce off owner-only screens (e.g.
+  // /admin, which reads cross-campaign operational metrics). Redirect to "/" so
+  // the home route resolves a safe destination even when campaign is unset.
   useEffect(() => {
-    if (role === "client" && !CLIENT_ALLOWED.includes(screen)) {
-      router.replace(screenHref(campaign, "overview"));
+    const clientBlocked = role === "client" && !CLIENT_ALLOWED.includes(screen);
+    const ownerBlocked = role !== "owner" && OWNER_ONLY.includes(screen);
+    if (clientBlocked || ownerBlocked) {
+      router.replace(ownerBlocked ? "/" : screenHref(campaign, "overview"));
     }
   }, [role, screen, campaign, router]);
 
