@@ -11,10 +11,22 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+/**
+ * A safe post-login redirect target: only a same-origin relative path. Rejects
+ * absolute URLs, protocol-relative "//host", scheme/userinfo tricks, and
+ * backslashes so `next` can never bounce the user off-origin (open redirect).
+ */
+function safeNext(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    return "/";
+  }
+  return raw;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/";
+  const next = safeNext(searchParams.get("next"));
 
   if (code) {
     const supabase = await createClient();
